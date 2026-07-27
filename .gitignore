@@ -10,4 +10,8 @@ index/bm25_index.pkl
 *.pkl
 .DS_Store
 .vscode/
-chroma_db/
+chroma_db/dump.rdb
+practice.py
+simple_graph.py
+test.py
+test_2.py
