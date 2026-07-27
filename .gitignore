@@ -3,10 +3,12 @@
 __pycache__/
 *.pyc
 data/users/
-data/products.db
 data/orders.db
-index/chroma_db/
-index/bm25_index.pkl
+data/users/
+data/products.json
+textile_knowledge.txt
+dump.rdb
+.claude/
 *.pkl
 .DS_Store
 .vscode/
