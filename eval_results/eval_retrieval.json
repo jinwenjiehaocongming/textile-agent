@@ -1,0 +1,1425 @@
+{
+  "top_k": 3,
+  "total": 50,
+  "skipped": 1,
+  "Recall@3": "100.00%",
+  "Precision@3": "85.71%",
+  "MRR": "1.00",
+  "details": [
+    {
+      "query": "羽绒服用什么面料做里料",
+      "expected": [
+        "场景推荐",
+        "羽绒服"
+      ],
+      "reason": "羽绒服里料推荐",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "场景推荐-羽绒服",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "面料基础-涤塔夫",
+          "score": 0.016
+        },
+        {
+          "rank": 3,
+          "category": "面料基础-春亚纺",
+          "score": 0.0159
+        }
+      ]
+    },
+    {
+      "query": "300T春亚纺的规格参数",
+      "expected": [
+        "面料基础",
+        "春亚纺"
+      ],
+      "reason": "春亚纺规格",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "场景推荐-羽绒服",
+          "score": 0.0163
+        },
+        {
+          "rank": 2,
+          "category": "面料基础-春亚纺",
+          "score": 0.0161
+        },
+        {
+          "rank": 3,
+          "category": "面料基础-牛津布",
+          "score": 0.0159
+        }
+      ]
+    },
+    {
+      "query": "牛津布600D和900D怎么选",
+      "expected": [
+        "面料基础",
+        "牛津布"
+      ],
+      "reason": "牛津布型号对比",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "面料基础-牛津布",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "场景推荐-箱包",
+          "score": 0.0161
+        },
+        {
+          "rank": 3,
+          "category": "品质检验-物理性能",
+          "score": 0.0156
+        }
+      ]
+    },
+    {
+      "query": "尼丝纺和涤塔夫哪个好",
+      "expected": [
+        "面料基础",
+        "尼丝纺"
+      ],
+      "reason": "面料对比",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "面料基础-尼丝纺",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "面料基础-涤塔夫",
+          "score": 0.0159
+        },
+        {
+          "rank": 3,
+          "category": "场景推荐-羽绒服",
+          "score": 0.0158
+        }
+      ]
+    },
+    {
+      "query": "桃皮绒是什么面料手感怎样",
+      "expected": [
+        "面料基础",
+        "桃皮绒"
+      ],
+      "reason": "桃皮绒特性",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "面料基础-桃皮绒",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "面料基础-麂皮绒",
+          "score": 0.016
+        },
+        {
+          "rank": 3,
+          "category": "后整理-磨毛",
+          "score": 0.016
+        }
+      ]
+    },
+    {
+      "query": "记忆布和普通面料有什么区别",
+      "expected": [
+        "面料基础",
+        "记忆布"
+      ],
+      "reason": "记忆布特点",
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "面料基础-记忆布",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "织造工艺-针织",
+          "score": 0.0158
+        },
+        {
+          "rank": 3,
+          "category": "织造工艺-三原组织",
+          "score": 0.0154
+        }
+      ]
+    },
+    {
+      "query": "麂皮绒适合做沙发吗",
+      "expected": [
+        "面料基础",
+        "麂皮绒"
+      ],
+      "reason": "麂皮绒用途",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "面料基础-麂皮绒",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "后整理-磨毛",
+          "score": 0.016
+        },
+        {
+          "rank": 3,
+          "category": "面料基础-桃皮绒",
+          "score": 0.016
+        }
+      ]
+    },
+    {
+      "query": "190T涤塔夫能做羽绒服吗",
+      "expected": [
+        "后整理",
+        "防绒",
+        "涤塔夫"
+      ],
+      "reason": "防绒面料要求",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "面料基础-涤塔夫",
+          "score": 0.0163
+        },
+        {
+          "rank": 2,
+          "category": "后整理-防绒",
+          "score": 0.0161
+        },
+        {
+          "rank": 3,
+          "category": "场景推荐-羽绒服",
+          "score": 0.0159
+        }
+      ]
+    },
+    {
+      "query": "涤纶和锦纶有什么区别",
+      "expected": [
+        "纤维原料",
+        "涤纶"
+      ],
+      "reason": "纤维对比",
+      "recall": 1.0,
+      "precision": 0.6666666666666666,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "纤维原料-锦纶",
+          "score": 0.0161
+        },
+        {
+          "rank": 2,
+          "category": "织造工艺-针织",
+          "score": 0.0149
+        },
+        {
+          "rank": 3,
+          "category": "后整理-染色",
+          "score": 0.0149
+        }
+      ]
+    },
+    {
+      "query": "氨纶是什么面料有什么特点",
+      "expected": [
+        "纤维原料",
+        "氨纶"
+      ],
+      "reason": "氨纶概念",
+      "recall": 1.0,
+      "precision": 0.6666666666666666,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "场景推荐-夏季服装",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "纤维原料-氨纶",
+          "score": 0.016
+        },
+        {
+          "rank": 3,
+          "category": "面料基础-尼丝纺",
+          "score": 0.0149
+        }
+      ]
+    },
+    {
+      "query": "粘胶纤维和棉哪个好",
+      "expected": [
+        "纤维原料",
+        "粘胶"
+      ],
+      "reason": "粘胶特性",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "纤维原料-粘胶",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "场景推荐-夏季服装",
+          "score": 0.0161
+        },
+        {
+          "rank": 3,
+          "category": "纤维原料-涤纶",
+          "score": 0.0156
+        }
+      ]
+    },
+    {
+      "query": "FDY和DTY是什么意思",
+      "expected": [
+        "纤维原料",
+        "FDY",
+        "DTY"
+      ],
+      "reason": "纱线术语",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "纤维原料-D/DTY/FDY/ATY概念",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "面料基础-春亚纺",
+          "score": 0.0161
+        },
+        {
+          "rank": 3,
+          "category": "面料基础-涤塔夫",
+          "score": 0.0159
+        }
+      ]
+    },
+    {
+      "query": "腈纶为什么叫人造羊毛",
+      "expected": [
+        "纤维原料",
+        "腈纶"
+      ],
+      "reason": "腈纶特性",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "纤维原料-腈纶",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "纤维原料-粘胶",
+          "score": 0.016
+        },
+        {
+          "rank": 3,
+          "category": "纤维原料-涤纶",
+          "score": 0.0081
+        }
+      ]
+    },
+    {
+      "query": "ATY是什么丝有什么用途",
+      "expected": [
+        "纤维原料",
+        "ATY"
+      ],
+      "reason": "空变丝概念",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "纤维原料-D/DTY/FDY/ATY概念",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "面料基础-尼丝纺",
+          "score": 0.0158
+        },
+        {
+          "rank": 3,
+          "category": "纤维原料-氨纶",
+          "score": 0.0154
+        }
+      ]
+    },
+    {
+      "query": "防水面料有哪些等级怎么测",
+      "expected": [
+        "后整理",
+        "防水"
+      ],
+      "reason": "防水等级",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "后整理-防水",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "品质检验-物理性能",
+          "score": 0.0161
+        },
+        {
+          "rank": 3,
+          "category": "后整理-涂层",
+          "score": 0.0154
+        }
+      ]
+    },
+    {
+      "query": "PU涂层和PA涂层哪个好",
+      "expected": [
+        "后整理",
+        "涂层"
+      ],
+      "reason": "涂层对比",
+      "recall": 1.0,
+      "precision": 0.6666666666666666,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "后整理-涂层",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "纤维原料-锦纶",
+          "score": 0.0154
+        },
+        {
+          "rank": 3,
+          "category": "印花工艺-涂料印花",
+          "score": 0.0153
+        }
+      ]
+    },
+    {
+      "query": "磨毛会导致面料变脆吗",
+      "expected": [
+        "后整理",
+        "磨毛"
+      ],
+      "reason": "磨毛影响",
+      "recall": 1.0,
+      "precision": 0.6666666666666666,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "后整理-磨毛",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "面料基础-桃皮绒",
+          "score": 0.0159
+        },
+        {
+          "rank": 3,
+          "category": "品质检验-物理性能",
+          "score": 0.0152
+        }
+      ]
+    },
+    {
+      "query": "涤纶染色温度多少需要注意什么",
+      "expected": [
+        "后整理",
+        "染色"
+      ],
+      "reason": "染色工艺",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "后整理-染色",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "后整理-压光",
+          "score": 0.0159
+        },
+        {
+          "rank": 3,
+          "category": "采购指南-流程",
+          "score": 0.0152
+        }
+      ]
+    },
+    {
+      "query": "防钻绒处理有几种方法",
+      "expected": [
+        "后整理",
+        "防绒"
+      ],
+      "reason": "防绒工艺",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "后整理-防绒",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "后整理-防水",
+          "score": 0.0156
+        },
+        {
+          "rank": 3,
+          "category": "场景推荐-羽绒服",
+          "score": 0.0153
+        }
+      ]
+    },
+    {
+      "query": "压光后还能再染色吗",
+      "expected": [
+        "后整理",
+        "压光"
+      ],
+      "reason": "压光限制",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "后整理-压光",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "后整理-染色",
+          "score": 0.0158
+        },
+        {
+          "rank": 3,
+          "category": "后整理-防绒",
+          "score": 0.0154
+        }
+      ]
+    },
+    {
+      "query": "贴合复合工艺是什么意思",
+      "expected": [
+        "后整理",
+        "贴合"
+      ],
+      "reason": "贴合工艺",
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "后整理-贴合复合",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "印花工艺-涂料印花",
+          "score": 0.0156
+        },
+        {
+          "rank": 3,
+          "category": "印花工艺-活性印花",
+          "score": 0.0156
+        }
+      ]
+    },
+    {
+      "query": "PVC涂层和PU涂层什么区别",
+      "expected": [
+        "后整理",
+        "涂层"
+      ],
+      "reason": "涂层区别",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "后整理-涂层",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "印花工艺-涂料印花",
+          "score": 0.0152
+        },
+        {
+          "rank": 3,
+          "category": "印花工艺-活性印花",
+          "score": 0.0147
+        }
+      ]
+    },
+    {
+      "query": "平纹斜纹缎纹有什么区别",
+      "expected": [
+        "织造工艺",
+        "平纹",
+        "斜纹",
+        "缎纹"
+      ],
+      "reason": "三原组织",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "织造工艺-三原组织",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "织造工艺-变化组织",
+          "score": 0.0161
+        },
+        {
+          "rank": 3,
+          "category": "面料基础-涤塔夫",
+          "score": 0.0155
+        }
+      ]
+    },
+    {
+      "query": "梭织和针织怎么区分",
+      "expected": [
+        "织造工艺",
+        "梭织",
+        "针织"
+      ],
+      "reason": "织造区别",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "织造工艺-针织",
+          "score": 0.0163
+        },
+        {
+          "rank": 2,
+          "category": "织造工艺-三原组织",
+          "score": 0.0161
+        },
+        {
+          "rank": 3,
+          "category": "织造工艺-变化组织",
+          "score": 0.016
+        }
+      ]
+    },
+    {
+      "query": "纬编和经编有什么不同",
+      "expected": [
+        "织造工艺",
+        "纬编",
+        "经编"
+      ],
+      "reason": "针织分类",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "织造工艺-针织",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "织造工艺-三原组织",
+          "score": 0.0081
+        },
+        {
+          "rank": 3,
+          "category": "面料基础-麂皮绒",
+          "score": 0.0081
+        }
+      ]
+    },
+    {
+      "query": "大提花和小提花是什么意思",
+      "expected": [
+        "织造工艺",
+        "提花"
+      ],
+      "reason": "提花概念",
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "织造工艺-变化组织",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "后整理-染色",
+          "score": 0.0157
+        },
+        {
+          "rank": 3,
+          "category": "采购指南-起订量",
+          "score": 0.0081
+        }
+      ]
+    },
+    {
+      "query": "牛仔布是什么组织织的",
+      "expected": [
+        "织造工艺",
+        "斜纹"
+      ],
+      "reason": "牛仔布组织",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "织造工艺-三原组织",
+          "score": 0.0161
+        },
+        {
+          "rank": 2,
+          "category": "织造工艺-变化组织",
+          "score": 0.016
+        },
+        {
+          "rank": 3,
+          "category": "织造工艺-针织",
+          "score": 0.0156
+        }
+      ]
+    },
+    {
+      "query": "活性印花和涂料印花哪个好",
+      "expected": [
+        "印花工艺",
+        "活性印花",
+        "涂料印花"
+      ],
+      "reason": "印花对比",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "印花工艺-涂料印花",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "印花工艺-活性印花",
+          "score": 0.0161
+        },
+        {
+          "rank": 3,
+          "category": "印花工艺-数码印花",
+          "score": 0.0159
+        }
+      ]
+    },
+    {
+      "query": "数码印花一码多少钱适合小批量吗",
+      "expected": [
+        "印花工艺",
+        "数码印花"
+      ],
+      "reason": "数码印花成本",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "印花工艺-数码印花",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "印花工艺-活性印花",
+          "score": 0.0158
+        },
+        {
+          "rank": 3,
+          "category": "印花工艺-转移印花",
+          "score": 0.0158
+        }
+      ]
+    },
+    {
+      "query": "转移印花适用于什么面料",
+      "expected": [
+        "印花工艺",
+        "转移印花"
+      ],
+      "reason": "转移印花适用",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "印花工艺-转移印花",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "印花工艺-活性印花",
+          "score": 0.016
+        },
+        {
+          "rank": 3,
+          "category": "印花工艺-涂料印花",
+          "score": 0.016
+        }
+      ]
+    },
+    {
+      "query": "做床品四件套用什么印花工艺",
+      "expected": [
+        "印花工艺",
+        "活性印花"
+      ],
+      "reason": "家纺印花选择",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "印花工艺-活性印花",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "印花工艺-涂料印花",
+          "score": 0.0161
+        },
+        {
+          "rank": 3,
+          "category": "印花工艺-数码印花",
+          "score": 0.0157
+        }
+      ]
+    },
+    {
+      "query": "深色面料能做数码印花吗",
+      "expected": [
+        "印花工艺",
+        "数码印花",
+        "白色墨水"
+      ],
+      "reason": "深色数码印花",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "印花工艺-数码印花",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "印花工艺-涂料印花",
+          "score": 0.0155
+        },
+        {
+          "rank": 3,
+          "category": "印花工艺-活性印花",
+          "score": 0.0154
+        }
+      ]
+    },
+    {
+      "query": "面料色牢度分几级4级算好吗",
+      "expected": [
+        "检测标准",
+        "色牢度",
+        "品质检验"
+      ],
+      "reason": "色牢度等级",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "品质检验-色牢度",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "检测标准-色牢度标准体系",
+          "score": 0.0161
+        },
+        {
+          "rank": 3,
+          "category": "行业术语",
+          "score": 0.0156
+        }
+      ]
+    },
+    {
+      "query": "A类B类C类面料是什么意思",
+      "expected": [
+        "检测标准",
+        "A类",
+        "B类",
+        "C类"
+      ],
+      "reason": "安全技术分类",
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "检测标准-安全技术要求",
+          "score": 0.0163
+        },
+        {
+          "rank": 2,
+          "category": "织造工艺-三原组织",
+          "score": 0.0082
+        },
+        {
+          "rank": 3,
+          "category": "行业术语",
+          "score": 0.0081
+        }
+      ]
+    },
+    {
+      "query": "出口欧洲面料要测哪些项目",
+      "expected": [
+        "检测标准",
+        "出口",
+        "Oeko"
+      ],
+      "reason": "出口检测",
+      "recall": 1.0,
+      "precision": 0.6666666666666666,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "检测标准-物理性能",
+          "score": 0.0161
+        },
+        {
+          "rank": 2,
+          "category": "检测标准-安全技术要求",
+          "score": 0.016
+        },
+        {
+          "rank": 3,
+          "category": "品质检验-物理性能",
+          "score": 0.0158
+        }
+      ]
+    },
+    {
+      "query": "耐摩擦色牢度干摩和湿摩什么区别",
+      "expected": [
+        "检测标准",
+        "摩擦",
+        "品质检验"
+      ],
+      "reason": "摩擦牢度",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "检测标准-色牢度标准体系",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "品质检验-色牢度",
+          "score": 0.0161
+        },
+        {
+          "rank": 3,
+          "category": "印花工艺-活性印花",
+          "score": 0.0157
+        }
+      ]
+    },
+    {
+      "query": "甲醛含量多少才算达标",
+      "expected": [
+        "检测标准",
+        "甲醛",
+        "品质检验"
+      ],
+      "reason": "甲醛限量",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "检测标准-安全技术要求",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "检测标准-色牢度标准体系",
+          "score": 0.0158
+        },
+        {
+          "rank": 3,
+          "category": "印花工艺-活性印花",
+          "score": 0.0155
+        }
+      ]
+    },
+    {
+      "query": "起订量最少多少米",
+      "expected": [
+        "采购指南",
+        "起订量"
+      ],
+      "reason": "MOQ",
+      "recall": 1.0,
+      "precision": 0.6666666666666666,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "采购指南-起订量",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "采购指南-面料规格概念",
+          "score": 0.0081
+        },
+        {
+          "rank": 3,
+          "category": "织造工艺-三原组织",
+          "score": 0.0081
+        }
+      ]
+    },
+    {
+      "query": "门幅是什么意思怎么量的",
+      "expected": [
+        "采购指南",
+        "门幅"
+      ],
+      "reason": "门幅概念",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "采购指南-面料规格概念",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "采购指南-流程",
+          "score": 0.0161
+        },
+        {
+          "rank": 3,
+          "category": "采购指南-起订量",
+          "score": 0.0079
+        }
+      ]
+    },
+    {
+      "query": "面料克重怎么看多少算厚",
+      "expected": [
+        "采购指南",
+        "克重"
+      ],
+      "reason": "克重概念",
+      "recall": 1.0,
+      "precision": 0.6666666666666666,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "采购指南-面料规格概念",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "采购指南-流程",
+          "score": 0.016
+        },
+        {
+          "rank": 3,
+          "category": "品质检验-物理性能",
+          "score": 0.0151
+        }
+      ]
+    },
+    {
+      "query": "打样费用一般多少钱",
+      "expected": [
+        "采购指南",
+        "打样"
+      ],
+      "reason": "样品费用",
+      "recall": 1.0,
+      "precision": 0.6666666666666666,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "行业术语",
+          "score": 0.0159
+        },
+        {
+          "rank": 2,
+          "category": "售后与退货",
+          "score": 0.0158
+        },
+        {
+          "rank": 3,
+          "category": "采购指南-流程",
+          "score": 0.0155
+        }
+      ]
+    },
+    {
+      "query": "FOB和CIF是什么意思",
+      "expected": [
+        "采购指南",
+        "FOB",
+        "CIF"
+      ],
+      "reason": "贸易术语",
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "采购指南-贸易术语",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "后整理-防水",
+          "score": 0.0081
+        },
+        {
+          "rank": 3,
+          "category": "织造工艺-针织",
+          "score": 0.0079
+        }
+      ]
+    },
+    {
+      "query": "染色色差怎么处理",
+      "expected": [
+        "常见问题",
+        "色差"
+      ],
+      "reason": "色差解决",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "常见问题-色差",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "后整理-染色",
+          "score": 0.0161
+        },
+        {
+          "rank": 3,
+          "category": "行业术语",
+          "score": 0.0156
+        }
+      ]
+    },
+    {
+      "query": "缩水了怎么办怎么预防",
+      "expected": [
+        "常见问题",
+        "缩水"
+      ],
+      "reason": "缩水解决",
+      "recall": 1.0,
+      "precision": 0.6666666666666666,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "常见问题-缩水",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "纤维原料-粘胶",
+          "score": 0.0152
+        },
+        {
+          "rank": 3,
+          "category": "后整理-防水",
+          "score": 0.0081
+        }
+      ]
+    },
+    {
+      "query": "面料起静电怎么处理",
+      "expected": [
+        "常见问题",
+        "静电"
+      ],
+      "reason": "静电解决",
+      "recall": 1.0,
+      "precision": 0.6666666666666666,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "常见问题-静电",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "纤维原料-涤纶",
+          "score": 0.0154
+        },
+        {
+          "rank": 3,
+          "category": "品质检验-物理性能",
+          "score": 0.0081
+        }
+      ]
+    },
+    {
+      "query": "布料纬斜是什么原因怎么办",
+      "expected": [
+        "常见问题",
+        "纬斜"
+      ],
+      "reason": "纬斜解决",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "常见问题-纬斜",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "售后与退货",
+          "score": 0.016
+        },
+        {
+          "rank": 3,
+          "category": "常见问题-缩水",
+          "score": 0.0156
+        }
+      ]
+    },
+    {
+      "query": "冲锋衣用什么面料什么规格",
+      "expected": [
+        "场景推荐",
+        "冲锋衣"
+      ],
+      "reason": "冲锋衣推荐",
+      "recall": 1.0,
+      "precision": 0.6666666666666666,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "场景推荐-冲锋衣",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "后整理-贴合复合",
+          "score": 0.0161
+        },
+        {
+          "rank": 3,
+          "category": "面料基础-涤塔夫",
+          "score": 0.0157
+        }
+      ]
+    },
+    {
+      "query": "做箱包用哪种牛津布比较好",
+      "expected": [
+        "场景推荐",
+        "箱包"
+      ],
+      "reason": "箱包推荐",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "面料基础-牛津布",
+          "score": 0.0163
+        },
+        {
+          "rank": 2,
+          "category": "场景推荐-箱包",
+          "score": 0.0163
+        },
+        {
+          "rank": 3,
+          "category": "品质检验-物理性能",
+          "score": 0.0157
+        }
+      ]
+    },
+    {
+      "query": "坯布和大货有什么区别",
+      "expected": [
+        "行业术语",
+        "坯布",
+        "大货"
+      ],
+      "reason": "术语区别",
+      "recall": 1.0,
+      "precision": 1.0,
+      "mrr": 1.0,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "行业术语",
+          "score": 0.0164
+        },
+        {
+          "rank": 2,
+          "category": "采购指南-流程",
+          "score": 0.0155
+        },
+        {
+          "rank": 3,
+          "category": "后整理-染色",
+          "score": 0.0154
+        }
+      ]
+    },
+    {
+      "query": "今天天气怎么样",
+      "expected": [
+        "无"
+      ],
+      "reason": "知识库外问题",
+      "recall": null,
+      "precision": null,
+      "mrr": null,
+      "hits": [
+        {
+          "rank": 1,
+          "category": "后整理-涂层",
+          "score": 0.0082
+        },
+        {
+          "rank": 2,
+          "category": "场景推荐-夏季服装",
+          "score": 0.0081
+        },
+        {
+          "rank": 3,
+          "category": "纤维原料-粘胶",
+          "score": 0.0079
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+data/users/
+data/products.db
+data/orders.db
+index/chroma_db/
+index/bm25_index.pkl
+*.pkl
+.DS_Store
+.vscode/
+chroma_db/

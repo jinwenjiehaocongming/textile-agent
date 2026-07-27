@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la /Users/rain/Desktop/Cyrene/)",
+      "Read(//Users/rain/Desktop/Cyrene/**)",
+      "Bash(find /Users/rain/Desktop/Cyrene -maxdepth 1 -type f | sort)",
+      "Bash(find /Users/rain/Desktop/Cyrene -maxdepth 2 -type d | sort)",
+      "Read(//Users/rain/Desktop/rag_study/**)",
+      "Read(//Users/rain/Desktop/rag_study/src/**)",
+      "WebSearch"
+    ]
+  }
+}
