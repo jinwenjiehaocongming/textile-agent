@@ -10,6 +10,7 @@ textile_knowledge.txt
 dump.rdb
 .claude/
 *.pkl
+!index/bm25_index.pkl
 .DS_Store
 .vscode/
 chroma_db/dump.rdb
