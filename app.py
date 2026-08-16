@@ -14,6 +14,15 @@ from pathlib import Path
 from langchain_core.messages import HumanMessage
 from src.agent import build_graph
 from src.memory import get_user
+from src.mcp_client import init_mcp
+
+# ── 初始化 MCP 工具层 ──
+print("🔌 连接 MCP 工具服务器...")
+init_mcp({
+    "product": ["python3", "src/mcp_servers/product_server.py"],
+    "order":   ["python3", "src/mcp_servers/order_server.py"],
+    "refund":  ["python3", "src/mcp_servers/refund_server.py"],
+})
 
 app = FastAPI(title="宏润纺织 AI 客服")
 agent_graph = build_graph()

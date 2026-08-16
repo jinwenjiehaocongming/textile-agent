@@ -5,18 +5,19 @@
 不碰产品库、不报价。
 """
 
-import sqlite3, sys
+import sys
 from pathlib import Path
-from datetime import datetime
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from dotenv import load_dotenv
 import os
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 load_dotenv()
+from src.logging_config import get_logger
+logger = get_logger(__name__)
 
-ORDERS_DB = Path(__file__).parent.parent / "data" / "orders.db"
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
+from src.mcp_client import get_mcp
 
 after_sales_llm = ChatOpenAI(
     api_key=os.getenv("DEEPSEEK_API_KEY"),
@@ -26,80 +27,9 @@ after_sales_llm = ChatOpenAI(
 )
 
 # ============================================================
-# 工具1：查订单
+# 工具已移至 MCP Server
+#   refund_server.py → query_order, create_refund
 # ============================================================
-def _query_order(order_no: str) -> str:
-    conn = sqlite3.connect(str(ORDERS_DB))
-    conn.row_factory = sqlite3.Row
-    row = conn.execute("SELECT * FROM orders WHERE order_no = ?", (order_no,)).fetchone()
-    conn.close()
-    if not row:
-        return f"未找到订单 {order_no}"
-    return (
-        f"订单号：{row['order_no']}\n"
-        f"产品：{row['product_name']} | {row['color']} | {row['quantity']}米\n"
-        f"单价：¥{row['unit_price']}/米 | 总价：¥{row['total']}\n"
-        f"状态：{row['status']}\n"
-        f"电话：{row['phone'] or '未留'} | 地址：{row['address'] or '未留'}\n"
-        f"下单时间：{row['created_at'][:16]}"
-    )
-
-
-QUERY_ORDER_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "query_order",
-        "description": "查询订单详情，用于售后处理前确认订单信息",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "order_no": {"type": "string", "description": "订单号 ORD-xxx"},
-            },
-            "required": ["order_no"],
-        },
-    },
-}
-
-
-# ============================================================
-# 工具2：创建退款工单
-# ============================================================
-def _create_refund(order_no: str, reason: str) -> str:
-    now = datetime.now()
-    try:
-        conn = sqlite3.connect(str(ORDERS_DB))
-        conn.execute(
-            "INSERT INTO refunds (order_no, reason, status, created_at) VALUES (?, ?, '待审核', ?)",
-            (order_no, reason, now.isoformat()),
-        )
-        conn.commit()
-        conn.close()
-    except Exception:
-        return "退款申请提交失败，请稍后重试。如需紧急处理请联系销售经理。"
-    return (
-        f"✅ 退款工单已生成！\n"
-        f"订单号：{order_no}\n"
-        f"退款原因：{reason}\n"
-        f"状态：待审核\n"
-        f"我们的售后人员将在 1 个工作日内审核并联系您。"
-    )
-
-
-CREATE_REFUND_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "create_refund",
-        "description": "为客户创建退款/退货工单。仅在确认符合退货条件后调用。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "order_no": {"type": "string", "description": "订单号"},
-                "reason": {"type": "string", "description": "退款原因，如：色差超标、纬斜、面料破损等"},
-            },
-            "required": ["order_no", "reason"],
-        },
-    },
-}
 
 
 # ============================================================
@@ -154,22 +84,28 @@ AFTER_SALES_PROMPT = """你是纺织厂的售后服务专员。处理客户的�
 - 不确定的情况，建议客户寄回样片检测
 - 不直接承诺赔多少钱——工单审核后由人工确认
 
-对话历史：
-{history}
-
 请处理客户的售后需求。"""
 
 
 def after_sales_node(messages: list) -> AIMessage:
-    """售后 Agent 的对话节点"""
-    history = "\n".join(
-        f"{'客户' if m.type == 'human' else '客服'}: {m.content[:100]}"
-        for m in messages[-10:]
+    """售后 Agent 的对话节点。工具通过 MCP Client 自动发现。"""
+    mcp = get_mcp()
+
+    # 售后只绑查订单 + 创建退款
+    llm_with_tools = after_sales_llm.bind_tools(
+        mcp.get_tools_for_langchain(["query_order", "create_refund"])
     )
 
-    llm_with_tools = after_sales_llm.bind_tools([QUERY_ORDER_SCHEMA, CREATE_REFUND_SCHEMA])
+    # 对话历史作为真正的 message 列表传入（不再拼进 system prompt）
+    history_msgs = [
+        HumanMessage(content=m.content) if m.type == "human" else AIMessage(content=m.content)
+        for m in messages[-10:]
+        if m.type in ("human", "ai") and m.content
+    ]
+
     conversation = [
-        SystemMessage(content=AFTER_SALES_PROMPT.format(history=history)),
+        SystemMessage(content=AFTER_SALES_PROMPT),
+        *history_msgs,
         HumanMessage(content="请处理客户的售后需求。"),
     ]
 
@@ -181,14 +117,8 @@ def after_sales_node(messages: list) -> AIMessage:
             tool_msgs = []
             for tc in response.tool_calls:
                 name, args = tc["name"], tc["args"]
-                if name == "query_order":
-                    result = _query_order(**args)
-                    print(f"   🔧 [售后] query_order({args['order_no']})")
-                elif name == "create_refund":
-                    result = _create_refund(**args)
-                    print(f"   🔧 [售后] create_refund({args['order_no']})")
-                else:
-                    result = f"未知工具: {name}"
+                result = mcp.call_tool(name, args)
+                logger.info(f"[售后] {name}({args})")
                 tool_msgs.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
             conversation.extend(tool_msgs)
 

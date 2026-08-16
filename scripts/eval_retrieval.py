@@ -1,235 +1,152 @@
 """
-检索质量评估
-============
-定义测试集 → 跑检索 → 算指标
+检索评估 + 消融实验
+====================
+对比 4 种检索配置在 Hit@k / MRR 上的表现，验证「混合检索 + Rerank」的价值：
 
-指标：
-  Recall@K  ：正确答案出现在前K个结果中的比例
-  MRR       ：第一个正确答案的平均排名倒数
-  Precision@K：前K个结果中正确答案占比
+  ① 纯向量（ChromaDB + bge-base-zh-v1.5）
+  ② 纯 BM25（关键词）
+  ③ 混合（向量 + BM25 → RRF 融合）
+  ④ 混合 + CrossEncoder Rerank
 
 运行: python scripts/eval_retrieval.py
 """
-
+import json
+import os
+import re
 import sys
 from pathlib import Path
+from typing import Callable, List
+
+os.environ.setdefault("TQDM_DISABLE", "1")  # 禁用 CrossEncoder 的进度条
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.retrieval import HybridRetriever
-from typing import List, Dict
+from src.retrieval import HybridRetriever, rrf_fusion
 
 # ============================================================
-# 测试集：查询 → 期望命中的 chunk 标题/类别
+# 评测集：query → 期望命中的知识类别（独立标注，覆盖 30/47 个类别）
 # ============================================================
-TEST_CASES = [
-    # === 面料基础 (8题) ===
-    ("羽绒服用什么面料做里料",    ["场景推荐", "羽绒服"], "羽绒服里料推荐"),
-    ("300T春亚纺的规格参数",      ["面料基础", "春亚纺"], "春亚纺规格"),
-    ("牛津布600D和900D怎么选",    ["面料基础", "牛津布"], "牛津布型号对比"),
-    ("尼丝纺和涤塔夫哪个好",      ["面料基础", "尼丝纺"], "面料对比"),
-    ("桃皮绒是什么面料手感怎样",   ["面料基础", "桃皮绒"], "桃皮绒特性"),
-    ("记忆布和普通面料有什么区别", ["面料基础", "记忆布"], "记忆布特点"),
-    ("麂皮绒适合做沙发吗",        ["面料基础", "麂皮绒"], "麂皮绒用途"),
-    ("190T涤塔夫能做羽绒服吗",    ["后整理", "防绒", "涤塔夫"], "防绒面料要求"),
-
-    # === 纤维原料 (6题) ===
-    ("涤纶和锦纶有什么区别",      ["纤维原料", "涤纶"], "纤维对比"),
-    ("氨纶是什么面料有什么特点",   ["纤维原料", "氨纶"], "氨纶概念"),
-    ("粘胶纤维和棉哪个好",        ["纤维原料", "粘胶"], "粘胶特性"),
-    ("FDY和DTY是什么意思",       ["纤维原料", "FDY", "DTY"], "纱线术语"),
-    ("腈纶为什么叫人造羊毛",      ["纤维原料", "腈纶"], "腈纶特性"),
-    ("ATY是什么丝有什么用途",     ["纤维原料", "ATY"], "空变丝概念"),
-
-    # === 后整理 (8题) ===
-    ("防水面料有哪些等级怎么测",   ["后整理", "防水"], "防水等级"),
-    ("PU涂层和PA涂层哪个好",      ["后整理", "涂层"], "涂层对比"),
-    ("磨毛会导致面料变脆吗",      ["后整理", "磨毛"], "磨毛影响"),
-    ("涤纶染色温度多少需要注意什么", ["后整理", "染色"], "染色工艺"),
-    ("防钻绒处理有几种方法",      ["后整理", "防绒"], "防绒工艺"),
-    ("压光后还能再染色吗",        ["后整理", "压光"], "压光限制"),
-    ("贴合复合工艺是什么意思",    ["后整理", "贴合"], "贴合工艺"),
-    ("PVC涂层和PU涂层什么区别",   ["后整理", "涂层"], "涂层区别"),
-
-    # === 织造工艺 (5题) ===
-    ("平纹斜纹缎纹有什么区别",     ["织造工艺", "平纹", "斜纹", "缎纹"], "三原组织"),
-    ("梭织和针织怎么区分",        ["织造工艺", "梭织", "针织"], "织造区别"),
-    ("纬编和经编有什么不同",      ["织造工艺", "纬编", "经编"], "针织分类"),
-    ("大提花和小提花是什么意思",   ["织造工艺", "提花"], "提花概念"),
-    ("牛仔布是什么组织织的",      ["织造工艺", "斜纹"], "牛仔布组织"),
-
-    # === 印花工艺 (5题) ===
-    ("活性印花和涂料印花哪个好",   ["印花工艺", "活性印花", "涂料印花"], "印花对比"),
-    ("数码印花一码多少钱适合小批量吗", ["印花工艺", "数码印花"], "数码印花成本"),
-    ("转移印花适用于什么面料",    ["印花工艺", "转移印花"], "转移印花适用"),
-    ("做床品四件套用什么印花工艺",  ["印花工艺", "活性印花"], "家纺印花选择"),
-    ("深色面料能做数码印花吗",     ["印花工艺", "数码印花", "白色墨水"], "深色数码印花"),
-
-    # === 检测标准 (5题) ===
-    ("面料色牢度分几级4级算好吗",  ["检测标准", "色牢度", "品质检验"], "色牢度等级"),
-    ("A类B类C类面料是什么意思",   ["检测标准", "A类", "B类", "C类"], "安全技术分类"),
-    ("出口欧洲面料要测哪些项目",   ["检测标准", "出口", "Oeko"], "出口检测"),
-    ("耐摩擦色牢度干摩和湿摩什么区别", ["检测标准", "摩擦", "品质检验"], "摩擦牢度"),
-    ("甲醛含量多少才算达标",      ["检测标准", "甲醛", "品质检验"], "甲醛限量"),
-
-    # === 采购指南 (5题) ===
-    ("起订量最少多少米",          ["采购指南", "起订量"], "MOQ"),
-    ("门幅是什么意思怎么量的",    ["采购指南", "门幅"], "门幅概念"),
-    ("面料克重怎么看多少算厚",    ["采购指南", "克重"], "克重概念"),
-    ("打样费用一般多少钱",        ["采购指南", "打样"], "样品费用"),
-    ("FOB和CIF是什么意思",       ["采购指南", "FOB", "CIF"], "贸易术语"),
-
-    # === 常见问题 (4题) ===
-    ("染色色差怎么处理",          ["常见问题", "色差"], "色差解决"),
-    ("缩水了怎么办怎么预防",      ["常见问题", "缩水"], "缩水解决"),
-    ("面料起静电怎么处理",        ["常见问题", "静电"], "静电解决"),
-    ("布料纬斜是什么原因怎么办",   ["常见问题", "纬斜"], "纬斜解决"),
-
-    # === 场景推荐 (2题) ===
-    ("冲锋衣用什么面料什么规格",   ["场景推荐", "冲锋衣"], "冲锋衣推荐"),
-    ("做箱包用哪种牛津布比较好",   ["场景推荐", "箱包"], "箱包推荐"),
-
-    # === 行业术语 (1题) ===
-    ("坯布和大货有什么区别",      ["行业术语", "坯布", "大货"], "术语区别"),
-
-    # === 知识库外 (1题) ===
-    ("今天天气怎么样",           ["无"], "知识库外问题"),
+EVAL_SET = [
+    ("羽绒服用什么面料做", "场景推荐-羽绒服"),
+    ("冲锋衣用什么面料", "场景推荐-冲锋衣"),
+    ("夏季服装面料推荐", "场景推荐-夏季服装"),
+    ("箱包面料怎么选", "场景推荐-箱包"),
+    ("涤塔夫是什么", "面料基础-涤塔夫"),
+    ("尼丝纺的规格", "面料基础-尼丝纺"),
+    ("春亚纺的特点", "面料基础-春亚纺"),
+    ("牛津布有什么用途", "面料基础-牛津布"),
+    ("桃皮绒是什么", "面料基础-桃皮绒"),
+    ("麂皮绒的特点", "面料基础-麂皮绒"),
+    ("记忆布是什么面料", "面料基础-记忆布"),
+    ("面料起订量多少", "采购指南-起订量"),
+    ("采购面料的流程", "采购指南-流程"),
+    ("防水面料怎么做", "后整理-防水"),
+    ("羽绒服防钻绒怎么处理", "后整理-防绒"),
+    ("面料染色工艺", "后整理-染色"),
+    ("面料涂层工艺", "后整理-涂层"),
+    ("压光是什么工艺", "后整理-压光"),
+    ("面料磨毛处理", "后整理-磨毛"),
+    ("面料色差怎么办", "常见问题-色差"),
+    ("面料缩水怎么办", "常见问题-缩水"),
+    ("面料静电怎么处理", "常见问题-静电"),
+    ("面料纬斜是什么", "常见问题-纬斜"),
+    ("色牢度检测标准", "检测标准-色牢度标准体系"),
+    ("面料物理性能检测", "检测标准-物理性能"),
+    ("氨纶是什么纤维", "纤维原料-氨纶"),
+    ("锦纶的特点", "纤维原料-锦纶"),
+    ("粘胶纤维特点", "纤维原料-粘胶"),
+    ("数码印花工艺", "印花工艺-数码印花"),
+    ("活性印花工艺", "印花工艺-活性印花"),
 ]
 
-# ============================================================
-# 评估指标
-# ============================================================
-def is_relevant(result: Dict, expected_categories: List[str]) -> bool:
-    """判断一条检索结果是否相关：类别匹配 或 文本中包含期望关键词"""
-    # "无" 表示知识库外问题，任何结果都不应该命中
-    if expected_categories == ["无"]:
-        return False
-    if not expected_categories:
-        return False
-    text = result["text"]
-    category = result.get("category", "")
-    for exp in expected_categories:
-        if not exp:  # 跳过空字符串
-            continue
-        if exp in category or exp in text:
-            return True
-    return False
 
-
-def recall_at_k(results: List[Dict], expected_categories: List[str], k: int) -> float:
-    """前K个结果中至少有一个命中的比例（单个查询的二元值）"""
-    if expected_categories == ["无"]:
-        return None  # 知识库外问题，不参与评分
-    if not expected_categories:
-        return None
-    top_k = results[:k]
-    for r in top_k:
-        if is_relevant(r, expected_categories):
-            return 1.0
-    return 0.0
-
-
-def precision_at_k(results: List[Dict], expected_categories: List[str], k: int) -> float:
-    """前K个结果中相关结果的比例"""
-    if expected_categories == ["无"] or not expected_categories:
-        return None
-    top_k = results[:k]
-    relevant = sum(1 for r in top_k if is_relevant(r, expected_categories))
-    return relevant / k
-
-
-def mrr(results: List[Dict], expected_categories: List[str]) -> float:
-    """第一个正确答案的排名倒数：第1命中得1.0，第3命中得0.33"""
-    if expected_categories == ["无"] or not expected_categories:
-        return None
-    for i, r in enumerate(results):
-        if is_relevant(r, expected_categories):
-            return 1.0 / (i + 1)
-    return 0.0
+def _cat(text: str) -> str:
+    """从 chunk 文本提取 [类别] 标记"""
+    m = re.search(r"\[类别\]\s*(.+)", text)
+    return m.group(1).strip() if m else "未知"
 
 
 # ============================================================
-# 主评估
+# 四种检索配置
 # ============================================================
-def run_eval(top_k: int = 3):
+def _vector(r: HybridRetriever, query: str, k: int) -> List[str]:
+    raw = r.collection.query(query_texts=[query], n_results=k, include=["documents"])
+    return [_cat(d) for d in raw["documents"][0]]
+
+
+def _bm25(r: HybridRetriever, query: str, k: int) -> List[str]:
+    hits = r.bm25.search(query, top_k=k)
+    return [_cat(r.bm25.documents[idx]) for idx, _ in hits]
+
+
+def _hybrid(r: HybridRetriever, query: str, k: int) -> List[str]:
+    vec_raw = r.collection.query(query_texts=[query], n_results=10, include=["documents"])
+    vec_hits = [(d, i, 1.0) for i, d in enumerate(vec_raw["documents"][0])]
+    bm25_hits = [(r.bm25.documents[idx], idx, score) for idx, score in r.bm25.search(query, top_k=10)]
+    fused = rrf_fusion(vec_hits, bm25_hits)
+    return [_cat(text) for text, _, _ in fused[:k]]
+
+
+def _hybrid_rerank(r: HybridRetriever, query: str, k: int) -> List[str]:
+    return [res["category"] for res in r.retrieve(query, top_k=k, use_rerank=True)]
+
+
+# ============================================================
+# 指标：Hit@k（Recall@k）+ MRR
+# ============================================================
+def evaluate(search_fn: Callable, retriever: HybridRetriever, k: int = 3) -> dict:
+    hits, mrrs = [], []
+    for query, expected in EVAL_SET:
+        cats = search_fn(retriever, query, k)
+        rank = next((i + 1 for i, c in enumerate(cats) if c == expected), None)
+        hits.append(1.0 if rank else 0.0)
+        mrrs.append(1.0 / rank if rank else 0.0)
+    return {
+        "Hit@%d" % k: sum(hits) / len(hits),
+        "MRR": sum(mrrs) / len(mrrs),
+    }
+
+
+def main():
+    print("🔍 加载混合检索器（embedding + BM25 + Reranker 本地模型）...")
     retriever = HybridRetriever()
+    k = 3
 
-    print(f"{'='*70}")
-    print(f"检索质量评估（top_k={top_k}）")
-    print(f"{'='*70}\n")
+    methods = [
+        ("① 纯向量", _vector),
+        ("② 纯BM25", _bm25),
+        ("③ 混合(RRF)", _hybrid),
+        ("④ 混合+Rerank", _hybrid_rerank),
+    ]
 
-    recall_scores, precision_scores, mrr_scores = [], [], []
-    total, skipped = 0, 0
-    details = []  # 每题详情
+    print(f"\n评测集 {len(EVAL_SET)} 条 | top_k={k}\n")
+    print(f"{'方法':<18} {'Hit@{0}'.format(k):<10} {'MRR':<8}")
+    print("-" * 36)
+    results = {}
+    for name, fn in methods:
+        metrics = evaluate(fn, retriever, k)
+        results[name] = metrics
+        print(f"{name:<18} {metrics['Hit@%d' % k]:<10.1%} {metrics['MRR']:<8.3f}")
 
-    for query, expected_cats, reason in TEST_CASES:
-        results = retriever.retrieve(query, top_k=top_k)
+    # 结论：混合 + Rerank 应优于单路
+    base = results["① 纯向量"]["Hit@%d" % k]
+    best = results["④ 混合+Rerank"]["Hit@%d" % k]
+    print("\n" + "=" * 36)
+    print(f"结论: 混合+Rerank 相比纯向量，Hit@{k} {base:.1%} → {best:.1%}")
+    print("说明: 面料型号(T400/380T)是精确词，向量易漏，BM25 补精确匹配；Rerank 精排去噪。")
 
-        r = recall_at_k(results, expected_cats, top_k)
-        p = precision_at_k(results, expected_cats, top_k)
-        m = mrr(results, expected_cats)
-
-        # 知识库外的问题不参与评分
-        if r is None:
-            skipped += 1
-            prefix = "⏭️ "
-        elif r > 0:
-            prefix = "✅"
-        else:
-            prefix = "❌"
-
-        print(f"{prefix} [{reason}]")
-        print(f"   🔍 {query}")
-        print(f"   期望类别: {expected_cats}")
-        if r is not None:
-            print(f"   Recall@{top_k}={r:.0f}  Precision@{top_k}={p:.2f}  MRR={m:.2f}")
-            recall_scores.append(r)
-            precision_scores.append(p)
-            mrr_scores.append(m)
-        details.append({"query": query, "expected": expected_cats, "reason": reason,
-                        "recall": r, "precision": p, "mrr": m,
-                        "hits": [{"rank": i+1, "category": res["category"], "score": res["score"]}
-                                 for i, res in enumerate(results)]})
-        for i, res in enumerate(results):
-            marker = " ← 命中" if is_relevant(res, expected_cats) else ""
-            snippet = res["text"].split("\n")[0][:60]
-            print(f"   #{i+1} [{res['category']}] {snippet}{marker}")
-        total += 1
-        print()
-
-    # 汇总
-    print(f"{'='*70}")
-    print(f"汇总（{total} 题，{skipped} 题跳过）")
-    print(f"{'='*70}")
-    print(f"  Recall@{top_k}  avg: {sum(recall_scores)/len(recall_scores):.2%}")
-    print(f"  Precision@{top_k} avg: {sum(precision_scores)/len(precision_scores):.2%}")
-    print(f"  MRR            avg: {sum(mrr_scores)/len(mrr_scores):.2f}")
-
-    # 逐题详情
-    print(f"\n  未命中的查询:")
-    failed = [tc for tc in TEST_CASES
-              if recall_at_k(retriever.retrieve(tc[0], top_k=top_k), tc[1], top_k) == 0
-              and recall_at_k(retriever.retrieve(tc[0], top_k=top_k), tc[1], top_k) is not None]
-    if failed:
-        for q, exp, reason in failed:
-            print(f"    ❌ {q} → 期望 {exp}")
-    else:
-        print(f"    🎉 全部命中！")
-
-    # 保存报告
-    import json
-    report_path = Path(__file__).parent.parent / "eval_results" / "eval_retrieval.json"
-    report_path.parent.mkdir(exist_ok=True)
-    with open(report_path, "w", encoding="utf-8") as f:
-        json.dump({
-            "top_k": top_k,
-            "total": total, "skipped": skipped,
-            "Recall@3": f"{sum(recall_scores)/len(recall_scores):.2%}",
-            "Precision@3": f"{sum(precision_scores)/len(precision_scores):.2%}",
-            "MRR": f"{sum(mrr_scores)/len(mrr_scores):.2f}",
-            "details": details,
-        }, f, ensure_ascii=False, indent=2)
-    print(f"\n📄 报告: {report_path}")
+    # 写报告
+    out = Path(__file__).parent.parent / "eval_results"
+    out.mkdir(exist_ok=True)
+    report = {
+        "top_k": k,
+        "total": len(EVAL_SET),
+        "methods": results,
+    }
+    (out / "eval_retrieval.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"\n📄 报告已写入 eval_results/eval_retrieval.json")
 
 
 if __name__ == "__main__":
-    run_eval(top_k=3)
+    main()

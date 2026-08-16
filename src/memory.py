@@ -16,6 +16,8 @@ import os, chromadb
 from chromadb.utils import embedding_functions
 
 load_dotenv()
+from src.logging_config import get_logger
+logger = get_logger(__name__)
 
 DB_DIR = Path(__file__).parent.parent / "data" / "users"
 DB_DIR.mkdir(parents=True, exist_ok=True)
@@ -190,12 +192,12 @@ class UserMemory:
                             )
                         except Exception:
                             pass
-                print(f"   🧠 [记忆] 提取 {len(result.split(chr(10)))} 条偏好:")
+                logger.info(f"[记忆] 提取 {len(result.split(chr(10)))} 条偏好:")
                 for line in result.split("\n"):
                     if line.strip() and line.strip() != "SKIP":
-                        print(f"      → {line.strip()}")
+                        logger.info(f"[记忆] → {line.strip()}")
         except Exception as e:
-            print(f"   ⚠️ [记忆] 提取失败: {e}")
+            logger.warning(f"[记忆] 提取失败: {e}")
 
     def retrieve_preferences(self, n: int = 10) -> List[str]:
         """检索该用户的偏好，用于注入 system prompt"""
@@ -224,9 +226,9 @@ except Exception:
     _use_redis = False
 
 if _use_redis:
-    print("✅ Layer 1 热缓存: Redis")
+    logger.info("Layer 1 热缓存: Redis")
 else:
-    print("⚠️ Layer 1 热缓存: Dict (Redis 未运行)")
+    logger.warning("Layer 1 热缓存: Dict (Redis 未运行)")
 
 
 def _cache_load_recent(user_id: str, n: int = 50) -> list:

@@ -2,6 +2,7 @@
 .venv/
 __pycache__/
 *.pyc
+logs/
 data/users/
 data/orders.db
 data/users/
@@ -18,3 +19,9 @@ practice.py
 simple_graph.py
 test.py
 test_2.py
+
+# 无关项目/临时数据（不上传）
+xhs-autopost/
+*.xlsx
+ocr_result.json
+scripts/serper_search.py

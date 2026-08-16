@@ -28,8 +28,11 @@ BM25_PATH = PROJECT_ROOT / "index" / "bm25_index.pkl"
 # 本地 embedding 模型（免费，无需 API）
 EMBED_MODEL = "BAAI/bge-base-zh-v1.5"  # 102MB，效果≈text-embedding-v4的90%  # 中文 MTEB 榜首，326MB
 
+from langsmith import traceable
+from src.logging_config import get_logger
 from sentence_transformers import CrossEncoder
 rerank_model = CrossEncoder("BAAI/bge-reranker-base", max_length=512)
+logger = get_logger(__name__)
 
 # ============================================================
 # 中文分词（跟 build_index.py 一致）
@@ -161,6 +164,7 @@ class HybridRetriever:
         self.bm25_k = 10
         self.vec_weight = 0.5  # 向量:BM25 = 5:5
 
+    @traceable(run_type="retriever", name="hybrid_retrieve")
     def retrieve(
         self,
         query: str,
@@ -229,7 +233,7 @@ class HybridRetriever:
         if verbose:
             mode = "hybrid" if bm25_hits else "vector_only"
             mode += "+rerank" if use_rerank else ""
-            print(f"🔍 [{mode}] 查询: {query} → {len(results)} 条结果")
+            logger.info(f"[检索] [{mode}] 查询: {query} → {len(results)} 条结果")
 
         return results
 
@@ -238,7 +242,7 @@ class HybridRetriever:
         if len(candidates) <= top_k:
             return candidates
         pairs = [[query, doc["text"][:500]] for doc in candidates]
-        scores = rerank_model.predict(pairs)
+        scores = rerank_model.predict(pairs, show_progress_bar=False)
         for doc, score in zip(candidates, scores):
             doc["rerank_score"] = round(float(score), 4)
         candidates.sort(key=lambda x: x["rerank_score"], reverse=True)

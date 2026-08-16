@@ -25,16 +25,20 @@ from typing import TypedDict, List
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
+from langsmith import traceable
 from dotenv import load_dotenv
 import os
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.retrieval import HybridRetriever
-from src.order_agent import order_agent_node as order_agent, query_order
+from src.order_agent import order_agent_node as order_agent
 from src.after_sales_agent import after_sales_node as after_sales_agent_fn
 from src.memory import get_user
+from src.mcp_client import init_mcp, get_mcp
 
 load_dotenv()
+from src.logging_config import get_logger
+logger = get_logger(__name__)
 
 # ============================================================
 # 0. 配置
@@ -51,7 +55,7 @@ def _safe_llm(llm_inst, messages, fallback=None):
                 _time.sleep(i + 1)
             else:
                 if fallback is not None:
-                    print(f"   ⚠️ LLM 降级: {str(e)[:60]}")
+                    logger.warning(f"LLM 降级: {str(e)[:60]}")
                     return fallback
                 raise
 
@@ -71,115 +75,15 @@ cheap_llm = ChatOpenAI(
     max_retries=2, timeout=15,
 )
 
-import sqlite3
-DB_PATH = Path(__file__).parent.parent / "data" / "products.db"
-
 retriever = HybridRetriever()
 
 # ============================================================
-# 1. 产品查询工具 — JSON Schema 约束
+# 1. 工具定义已移至 MCP Server
+#    product_server.py → search_product
+#    order_server.py   → query_order_status, create_order
+#    refund_server.py  → query_order, create_refund
+#    Agent 通过 MCP Client 自动发现工具，不再需要硬编码 Schema
 # ============================================================
-# 下单 Agent 也要能查订单
-QUERY_ORDER_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "query_order_status",
-        "description": "查询订单状态。客户提供了订单号(ORD-开头的)就能查。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "order_no": {"type": "string", "description": "订单号，格式 ORD-20260720-xxxxxx"},
-            },
-            "required": ["order_no"],
-        },
-    },
-}
-
-SEARCH_PRODUCT_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "search_product",
-        "description": "查询产品库存和报价。用于客户询问价格、库存、MOQ、交期，按名称/颜色/品类搜面料，对比不同产品。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "产品名、颜色或品类关键词，如 'T400 黑色'、'牛津布'、'里料'",
-                }
-            },
-            "required": ["query"],
-        },
-    },
-}
-
-
-def search_product(query: str) -> str:
-    """
-    从 SQLite 查询产品。数据库做过滤 + 截断，Python 只做轻量计分排序。
-    """
-    keywords = [kw.strip().lower() for kw in query.replace("，", " ").replace(",", " ").split() if kw.strip()]
-    if not keywords:
-        return "请输入产品名、颜色或品类关键词。"
-
-    try:
-        conn = sqlite3.connect(str(DB_PATH))
-        conn.row_factory = sqlite3.Row
-
-        where_parts = []
-        params = []
-        for kw in keywords:
-            p = f"%{kw}%"
-            where_parts.append("(name LIKE ? OR color LIKE ? OR category LIKE ?)")
-            params.extend([p, p, p])
-
-        rows = conn.execute(
-            f"SELECT * FROM products WHERE {' OR '.join(where_parts)} LIMIT 50",
-            params
-        ).fetchall()
-
-        if not rows:
-            fragments = set()
-            for kw in keywords:
-                if len(kw) > 2:
-                    for i in range(len(kw) - 1):
-                        fragments.add(kw[i:i+2])
-            if fragments:
-                where_parts = []
-                params = []
-                for fg in fragments:
-                    p = f"%{fg}%"
-                    where_parts.append("(name LIKE ? OR color LIKE ? OR category LIKE ?)")
-                    params.extend([p, p, p])
-                rows = conn.execute(
-                    f"SELECT * FROM products WHERE {' OR '.join(where_parts)} LIMIT 50",
-                    params
-                ).fetchall()
-
-        conn.close()
-
-        if not rows:
-            return "未找到匹配产品。请尝试直接用面料名称（如 T400、牛津布、春亚纺、尼丝纺）搜索。"
-
-        scored = []
-        for r in rows:
-            text = f"{r['name']} {r['color']} {r['category']} {r['weight']} {r['id']}".lower()
-            score = sum(1 for kw in keywords if kw in text)
-            scored.append((score, r))
-
-        scored.sort(key=lambda x: x[0], reverse=True)
-        top10 = [r for _, r in scored[:10]]
-
-        lines = []
-        for r in top10:
-            lines.append(
-                f"货号:{r['id']} | {r['name']} | {r['color']} | 门幅:{r['width']}cm "
-                f"| {r['weight']} | 库存:{r['stock']}米 | MOQ:{r['moq']}米 "
-                f"| ¥{r['price']}/米 | 交期:{r['delivery_days']}天"
-            )
-        return "\n".join(lines)
-    except Exception:
-        return "产品查询暂时不可用，请稍后重试或联系销售经理。"
 
 
 # ============================================================
@@ -205,6 +109,7 @@ REVIEW_PROMPT = """你是纺织企业的安全审核员。审查客服回复是�
 {response}"""
 
 
+@traceable(run_type="chain", name="review_response")
 def review_response(text: str) -> dict:
     """
     双层审核：先规则快速拦截，再 LLM 深度审查。
@@ -283,7 +188,7 @@ def query_reformulator(state: AgentState) -> dict:
     last_msg = messages[-1].content
 
     if should_skip_retrieval(last_msg):
-        print(f"\n📝 [检索词] 跳过（闲聊）")
+        logger.debug("[检索词] 跳过（闲聊）")
         return {"rewrite_query": last_msg}
 
     # 取最近几轮摘要
@@ -292,7 +197,7 @@ def query_reformulator(state: AgentState) -> dict:
         for m in messages[-6:]
     )
 
-    print(f"\n📝 [检索词] 原文: {last_msg}")
+    logger.info(f"[检索词] 原文: {last_msg}")
 
     try:
         resp = _safe_llm(cheap_llm, [
@@ -303,7 +208,7 @@ def query_reformulator(state: AgentState) -> dict:
         reformulated = last_msg
 
     combined = f"{last_msg}\n{reformulated}"
-    print(f"   → 改写: {reformulated}")
+    logger.info(f"[检索词] → 改写: {reformulated}")
     return {"rewrite_query": combined}
 
 
@@ -314,16 +219,16 @@ def context_retriever(state: AgentState) -> dict:
     """用生成的检索词查知识库。闲聊跳过，省 embedding + Rerank 调用。"""
     last_msg = state["messages"][-1].content
     if should_skip_retrieval(last_msg):
-        print(f"\n🔍 [检索] 跳过（闲聊）")
+        logger.debug("[检索] 跳过（闲聊）")
         return {"knowledge_chunks": []}
 
     query = state.get("rewrite_query", last_msg)
-    print(f"\n🔍 [检索] 查询: {query}")
+    logger.info(f"[检索] 查询: {query}")
 
     results = retriever.retrieve(query, top_k=5, use_rerank=True)
     chunks = [r["text"] for r in results]
 
-    print(f"   → 命中 {len(chunks)} 条: {[r['category'] for r in results]}")
+    logger.info(f"[检索] 命中 {len(chunks)} 条: {[r['category'] for r in results]}")
     return {"knowledge_chunks": chunks}
 
 
@@ -353,14 +258,17 @@ def agent_node(state: AgentState) -> dict:
     chunks = state.get("knowledge_chunks", [])
     knowledge_text = "\n---\n".join(chunks) if chunks else "（无参考知识）"
 
-    print(f"\n🤖 [Agent] msgs={len(messages)}, chunks={len(chunks)}")
+    logger.debug(f"[Agent] msgs={len(messages)}, chunks={len(chunks)}")
 
     user_context = state.get("user_context", "")
     system = SystemMessage(content=SYSTEM_PROMPT.format(
         knowledge=knowledge_text,
         user_context=user_context or "（新客户，暂无历史档案）"
     ))
-    llm_with_tools = llm.bind_tools([SEARCH_PRODUCT_SCHEMA, QUERY_ORDER_SCHEMA])
+    # MCP 动态工具发现：售前只用查产品 + 查订单
+    mcp = get_mcp()
+    mcp_tools = mcp.get_tools_for_langchain(["search_product", "query_order_status"])
+    llm_with_tools = llm.bind_tools(mcp_tools)
     # 过滤孤立的 ToolMessage（订单结果等），避免 API 报错
     safe = []
     pending = 0
@@ -376,13 +284,12 @@ def agent_node(state: AgentState) -> dict:
                 pending -= 1
         else:
             safe.append(m)
-    response = llm_with_tools.invoke([system] + safe)
     response = _safe_llm(llm_with_tools, [system] + safe,
         fallback=AIMessage(content="系统繁忙，请稍后重试。如有紧急需求请联系销售经理。"))
     if hasattr(response, "tool_calls") and response.tool_calls:
-        print(f"   🔧 调用: {[(tc['name'], tc['args']) for tc in response.tool_calls]}")
+        logger.info(f"[Agent] 工具调用: {[(tc['name'], tc['args']) for tc in response.tool_calls]}")
     else:
-        print(f"   💬 回答长度: {len(response.content) if response.content else 0} 字")
+        logger.debug(f"[Agent] 回答长度: {len(response.content) if response.content else 0} 字")
 
     return {"messages": state["messages"] + [response]}
 
@@ -391,18 +298,14 @@ def agent_node(state: AgentState) -> dict:
 # 6. 工具执行节点
 # ============================================================
 def tool_executor(state: AgentState) -> dict:
+    """统一工具执行：通过 MCP Client 路由到正确的 Server，不再需要 if/elif"""
     last_msg = state["messages"][-1]
     results = []
     for tc in last_msg.tool_calls:
         name, args = tc["name"], tc["args"]
-        print(f"\n⚙️ [工具] {name}({args})")
-        if name == "search_product":
-            result = search_product(**args)
-        elif name == "query_order_status":
-            result = query_order(**args)
-        else:
-            result = f"未知工具: {name}"
-        print(f"   ✅ 结果: {result}")
+        logger.info(f"[工具] {name}({args})")
+        result = get_mcp().call_tool(name, args)
+        logger.debug(f"[工具] {name} 结果: {result}")
         results.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
     return {"messages": state["messages"] + results}
 
@@ -413,16 +316,16 @@ def tool_executor(state: AgentState) -> dict:
 def review_node(state: AgentState) -> dict:
     last_msg = state["messages"][-1]
     if last_msg.type != "ai" or not last_msg.content:
-        print("\n🛡️ [审核] 跳过（非 AI 消息）")
+        logger.debug("[审核] 跳过（非 AI 消息）")
         return {}
 
     verdict = review_response(last_msg.content)
     if not verdict["safe"]:
-        print(f"\n🛡️ [审核] 拦截: {verdict['reason']}")
+        logger.warning(f"[审核] 拦截: {verdict['reason']}")
         rewrite = verdict.get("rewrite", "抱歉，这个信息暂时无法提供。")
         safe = AIMessage(content=rewrite)
         return {"messages": state["messages"][:-1] + [safe]}
-    print(f"\n🛡️ [审核] 通过")
+    logger.info("[审核] 通过")
     return {}
 
 
@@ -478,13 +381,13 @@ def supervisor_node(state: AgentState) -> dict:
     last = messages[-1] if messages else None
     if last and hasattr(last, "type") and last.type == "tool":
         if "ORD-" in str(last.content) or "退款工单" in str(last.content):
-            print("\n🧭 [Supervisor] → 售前 Agent（已完成）")
+            logger.info("[Supervisor] → 售前 Agent（已完成）")
             return {"query_type": "chat"}
 
     # Layer 1: 规则延续
     if _detect_continuation(messages):
         labels = {"chat": "售前", "place_order": "下单", "after_sales": "售后"}
-        print(f"\n🧭 [Supervisor] 延续 → {labels.get(prev, prev)}")
+        logger.info(f"[Supervisor] 延续 → {labels.get(prev, prev)}")
         return {"query_type": prev}
 
     # Layer 2: LLM 分类
@@ -505,14 +408,14 @@ def supervisor_node(state: AgentState) -> dict:
 
     labels = {"sales": "售前 Agent", "order": "下单 Agent", "after_sales": "售后 Agent"}
     qtypes = {"sales": "chat", "order": "place_order", "after_sales": "after_sales"}
-    print(f"\n🧭 [Supervisor] → {labels[result]}")
+    logger.info(f"[Supervisor] → {labels[result]}")
     return {"query_type": qtypes[result]}
 
 
 def order_agent_node(state: AgentState) -> dict:
     """下单 Agent。完成后状态切回售前。"""
-    print("\n📋 [下单Agent] 处理订单...")
-    reply = order_agent(state["messages"])
+    logger.info("[下单Agent] 处理订单...")
+    reply = order_agent(state["messages"], customer_id=state.get("user_id", "guest"))
     result = {"messages": state["messages"] + [reply]}
     # 下单完成 → 切回售前，避免"你好"也走下单
     if hasattr(reply, "content") and "ORD-" in str(reply.content):
@@ -522,7 +425,7 @@ def order_agent_node(state: AgentState) -> dict:
 
 def after_sales_agent_node(state: AgentState) -> dict:
     """售后 Agent。完成后状态切回售前。"""
-    print("\n🔧 [售后Agent] 处理售后...")
+    logger.info("[售后Agent] 处理售后...")
     reply = after_sales_agent_fn(state["messages"])
     result = {"messages": state["messages"] + [reply]}
     if hasattr(reply, "content") and "退款工单已生成" in str(reply.content):
@@ -595,6 +498,16 @@ def build_graph():
 # 10. 测试
 # ============================================================
 def main():
+    # ── 初始化 MCP 工具层 ──
+    print("🔌 连接 MCP 工具服务器...")
+    init_mcp({
+        "product": ["python3", "src/mcp_servers/product_server.py"],
+        "order":   ["python3", "src/mcp_servers/order_server.py"],
+        "refund":  ["python3", "src/mcp_servers/refund_server.py"],
+    })
+    mcp = get_mcp()
+    print(f"   已发现工具: {[t['name'] for t in mcp.tools]}")
+
     app = build_graph()
 
     # 用户 ID（模拟企业微信 external_userid）
@@ -620,48 +533,47 @@ def main():
     print(f"🏭 宏润纺织 AI 客服 | 用户: {user_id}")
     print(f"   加载 {len(history)} 条历史 | 输入 'exit' 退出 | 'reset' 清记录")
     print(f"{'='*60}")
-    while True:
-        try:
-            user_input = input("\n👤 您: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\n👋 再见！")
-            break
+    try:
+        while True:
+            try:
+                user_input = input("\n👤 您: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n👋 再见！")
+                break
 
-        if not user_input:
-            continue
-        if user_input.lower() == "exit":
-            print("👋 再见！")
-            break
-        if user_input.lower() == "reset":
-            memory.clear_history()
-            state = {"messages": [], "knowledge_chunks": [], "rewrite_query": "",
-                     "query_type": "chat", "user_id": user_id, "user_context": ""}
-            print("🔄 对话记录已清除")
-            continue
+            if not user_input:
+                continue
+            if user_input.lower() == "exit":
+                print("👋 再见！")
+                break
+            if user_input.lower() == "reset":
+                memory.clear_history()
+                state = {"messages": [], "knowledge_chunks": [], "rewrite_query": "",
+                         "query_type": "chat", "user_id": user_id, "user_context": ""}
+                print("🔄 对话记录已清除")
+                continue
 
-        state["messages"] = state["messages"] + [HumanMessage(content=user_input)]
-        state["knowledge_chunks"] = []
-        state["rewrite_query"] = ""
+            state["messages"] = state["messages"] + [HumanMessage(content=user_input)]
+            state["knowledge_chunks"] = []
+            state["rewrite_query"] = ""
 
-        state["messages"] = state["messages"] + [HumanMessage(content=user_input)]
-        state["knowledge_chunks"] = []
-        state["rewrite_query"] = ""
+            result = app.invoke(state)
+            state = result
 
-        result = app.invoke(state)
-        state = result
+            print(f"\n🤖 客服: {result['messages'][-1].content}")
 
-        print(f"\n🤖 客服: {result['messages'][-1].content}")
+            # 存档本轮新消息
+            memory.save_messages([HumanMessage(content=user_input), result["messages"][-1]])
 
-        # 存档本轮新消息
-        memory.save_messages([HumanMessage(content=user_input), result["messages"][-1]])
-
-        # 异步提取偏好（后台线程，不阻塞）
-        import threading
-        threading.Thread(
-            target=memory.extract_and_store,
-            args=(state["messages"], cheap_llm),
-            daemon=True,
-        ).start()
+            # 异步提取偏好（后台线程，不阻塞）
+            import threading
+            threading.Thread(
+                target=memory.extract_and_store,
+                args=(state["messages"], cheap_llm),
+                daemon=True,
+            ).start()
+    finally:
+        mcp.shutdown()
 
 
 if __name__ == "__main__":
