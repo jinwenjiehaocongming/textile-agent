@@ -4,10 +4,9 @@
 不依赖 mcp 包，纯标准库实现。通过子进程启动 MCP Server，
 用 JSON-RPC 2.0 协议通过标准输入输出通信。
 
-面试可以这么说：
-  "我用 Python 标准库实现了一个轻量 MCP Client，
-   通过 subprocess + JSON-RPC over stdio 和 MCP Server 通信，
-   理解了协议发现（initialize → tools/list → tools/call）的完整握手流程。"
+设计要点：
+  用标准库实现轻量 MCP Client，通过 subprocess + JSON-RPC over stdio 通信，
+  完成协议发现（initialize → tools/list → tools/call）的完整握手流程。
 """
 
 import json

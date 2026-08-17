@@ -128,7 +128,7 @@ def tokenize_chinese(text: str) -> List[str]:
 
 
 class BM25Index:
-    """BM25 稀疏索引，跟 rag_study 一样"""
+    """BM25 稀疏索引"""
 
     def __init__(self, k1: float = 1.5, b: float = 0.75):
         self.k1 = k1

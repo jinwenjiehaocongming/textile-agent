@@ -25,3 +25,6 @@ xhs-autopost/
 *.xlsx
 ocr_result.json
 scripts/serper_search.py
+
+# 个人学习笔记（不上传）
+MCP_MIGRATION_GUIDE.md
