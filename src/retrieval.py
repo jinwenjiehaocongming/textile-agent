@@ -160,9 +160,19 @@ class HybridRetriever:
         # BM25 端
         self.bm25 = BM25Index.load(bm25_path)
 
+        # 建立 text → category 映射（元数据与正文分离后，类别从元数据取，不再正则抠正文）
+        self._text2cat: Dict[str, str] = {}
+        data = self.collection.get(include=["documents", "metadatas"])
+        for doc, meta in zip(data["documents"], data["metadatas"]):
+            self._text2cat[doc] = (meta or {}).get("category", "未知")
+
         self.vec_k = 10
         self.bm25_k = 10
         self.vec_weight = 0.5  # 向量:BM25 = 5:5
+
+    def _category(self, text: str) -> str:
+        """按正文查类别（正文→类别映射）。"""
+        return self._text2cat.get(text, "未知")
 
     @traceable(run_type="retriever", name="hybrid_retrieve")
     def retrieve(
@@ -206,9 +216,8 @@ class HybridRetriever:
         bm25_hits = []
         for idx, score in bm25_raw:
             doc = self.bm25.documents[idx]
-            # category 过滤
-            cat_match = re.search(r"\[类别\]\s*(.+)", doc)
-            if category and cat_match and cat_match.group(1).strip() != category:
+            # category 过滤（类别从元数据取）
+            if category and self._text2cat.get(doc, "") != category:
                 continue
             bm25_hits.append((doc, idx, score))
 
@@ -219,11 +228,10 @@ class HybridRetriever:
         # 5. 组装结果
         results = []
         for text, idx, score in fused[:fetch_k]:
-            cat_match = re.search(r"\[类别\]\s*(.+)", text)
             results.append({
                 "text": text,
                 "score": round(score, 4),
-                "category": cat_match.group(1).strip() if cat_match else "未知",
+                "category": self._category(text),
             })
 
         # 6. LLM Rerank（可选）

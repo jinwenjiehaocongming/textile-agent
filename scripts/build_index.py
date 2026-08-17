@@ -13,6 +13,7 @@ import re
 import math
 import pickle
 import os
+import json
 from pathlib import Path
 from typing import List, Dict, Tuple
 import chromadb
@@ -26,7 +27,7 @@ load_dotenv()
 # ============================================================
 # 路径：脚本在 scripts/ 下，数据在 data/，索引输出到 index/
 PROJECT_ROOT = Path(__file__).parent.parent
-KNOWLEDGE_FILE = PROJECT_ROOT / "data" / "knowledge.txt"
+CHUNKS_PATH = PROJECT_ROOT / "data" / "chunks.json"
 CHROMA_PATH = PROJECT_ROOT / "index" / "chroma_db"
 BM25_PATH = PROJECT_ROOT / "index" / "bm25_index.pkl"
 
@@ -37,48 +38,20 @@ EMBED_MODEL = "BAAI/bge-base-zh-v1.5"  # 102MB，中文 MTEB 前3
 # ============================================================
 # 2. 数据加载和切块
 # ============================================================
-def load_chunks(filepath: Path) -> List[Dict]:
+def load_chunks_json(path: Path) -> List[Dict]:
     """
-    读取结构化 txt，按 --- 分隔每条知识，提取元数据。
+    读取 ingest.py 产出的 chunks.json（正文干净、元数据与正文分离）。
     返回: [{"text": str, "category": str, "tags": str, "title": str}, ...]
     """
-    if not filepath.exists():
-        raise FileNotFoundError(f"知识库文件不存在: {filepath}")
-
-    raw = filepath.read_text(encoding="utf-8")
-
-    # 按 --- 分割
-    chunks_raw = raw.split("---")
-
-    chunks = []
-    for chunk in chunks_raw:
-        chunk = chunk.strip()
-        # 跳过注释行和空块
-        if not chunk or chunk.startswith("#"):
-            continue
-
-        # 提取 [类别] 字段
-        cat_match = re.search(r"\[类别\]\s*(.+)", chunk)
-        category = cat_match.group(1).strip() if cat_match else "未分类"
-
-        # 提取 [标签] 字段
-        tag_match = re.search(r"\[标签\]\s*(.+)", chunk)
-        tags = tag_match.group(1).strip() if tag_match else ""
-
-        # 提取 【标题】 字段
-        title_match = re.search(r"【(.+?)】", chunk)
-        title = title_match.group(1).strip() if title_match else ""
-
-        chunks.append({
-            "text": chunk,
-            "category": category,
-            "tags": tags,
-            "title": title,
-        })
+    if not path.exists():
+        raise FileNotFoundError(
+            f"chunks 文件不存在: {path}（请先运行 python scripts/ingest.py）"
+        )
+    chunks = json.loads(path.read_text(encoding="utf-8"))
 
     print(f"✅ 加载完成: {len(chunks)} 条知识块")
-    for cat in set(c["category"] for c in chunks):
-        count = sum(1 for c in chunks if c["category"] == cat)
+    for cat in sorted(set(c["category"].split("-")[0] for c in chunks)):
+        count = sum(1 for c in chunks if c["category"].split("-")[0] == cat)
         print(f"   [{cat}] {count} 条")
     return chunks
 
@@ -240,7 +213,7 @@ def main():
     print("🔨 开始构建索引...\n")
 
     # Step 1: 加载数据
-    chunks = load_chunks(KNOWLEDGE_FILE)
+    chunks = load_chunks_json(CHUNKS_PATH)
 
     # Step 2: ChromaDB 向量索引
     print("\n📊 构建 ChromaDB 向量索引...")

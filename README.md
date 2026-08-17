@@ -11,7 +11,7 @@
 - **售后处理** — 查订单 → 对照退货规则 → 生成退款工单
 - **双层审核** — 规则快速拦截 + LLM 安全审查
 - **三层记忆** — Redis 热缓存 + SQLite 持久化 + ChromaDB 偏好提取
-- **评估体系** — 检索消融评测 30 题 + 端到端评测 11 题
+- **评估体系** — 检索消融评测 85 题 + 端到端评测 11 题
 
 ## 快速开始
 
@@ -52,7 +52,7 @@ Rerank: BAAI/bge-reranker-base (本地 CrossEncoder)
 | 指标 | 得分 |
 |------|:--:|
 | 检索 Hit@3 | 100% |
-| 检索 MRR | 0.94 |
+| 检索 MRR | 0.951 |
 | 端到端通过率 | 100% (11/11) |
 
 详见 [EVALUATION.md](EVALUATION.md)
@@ -94,7 +94,7 @@ src/
 └── mcp_servers/           工具服务层 (product/order/refund)
 scripts/
 ├── build_index.py         构建索引
-├── eval_retrieval.py      检索消融评测 (30题)
+├── eval_retrieval.py      检索消融评测 (85题)
 └── eval_agent.py          端到端评测 (11题)
 index/                    索引文件 (auto-gen)
 data/
