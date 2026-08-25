@@ -1,0 +1,21 @@
+# 构建上下文排除项
+.git
+.venv
+web/node_modules
+web/.npm-cache
+web/dist
+logs
+.pytest_cache
+data/users
+*.db-wal
+*.db-shm
+dump.rdb
+.env
+__pycache__
+*.pyc
+.DS_Store
+.claude
+.vscode
+xhs-autopost
+ocr_result.json
+eval_results

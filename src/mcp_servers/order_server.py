@@ -5,22 +5,25 @@
 下单 Agent 和售前 Agent 都通过 MCP 协议调用。
 """
 import json
-import sqlite3
+import random
 import sys
 from pathlib import Path
 from datetime import datetime
+
+try:
+    from sqlite_utils import execute, query_one  # 纯脚本运行（sys.path[0] = src/mcp_servers/）
+except ImportError:
+    from src.mcp_servers.sqlite_utils import execute, query_one  # 包方式导入（测试/项目内）
 
 ORDERS_DB = Path(__file__).parent.parent.parent / "data" / "orders.db"
 
 
 def query_order(order_no: str) -> str:
     """查询订单状态"""
-    conn = sqlite3.connect(str(ORDERS_DB))
-    conn.row_factory = sqlite3.Row
-    row = conn.execute(
-        "SELECT * FROM orders WHERE order_no = ?", (order_no,)
-    ).fetchone()
-    conn.close()
+    row = query_one(
+        ORDERS_DB,
+        "SELECT * FROM orders WHERE order_no = ?", (order_no,),
+    )
     if not row:
         return f"未找到订单 {order_no}"
     return (
@@ -35,14 +38,15 @@ def query_order(order_no: str) -> str:
 def create_order(customer_id: str, product_id: str, product_name: str,
                  color: str, quantity: int, unit_price: float,
                  phone: str = "", address: str = "", delivery_date: str = "") -> str:
-    """创建订单，写入 SQLite"""
+    """创建订单，写入 SQLite。连接由 sqlite_utils 保证 finally 关闭（不泄漏）。"""
     now = datetime.now()
-    order_no = f"ORD-{now.strftime('%Y%m%d')}-{now.strftime('%H%M%S')}"
+    # 订单号 = 日期 + 时分秒 + 微秒(6位) + 随机(4位)：并发下同一秒多单不撞 UNIQUE 约束
+    order_no = (f"ORD-{now.strftime('%Y%m%d')}-"
+                f"{now.strftime('%H%M%S')}{now.microsecond:06d}{random.randint(1000, 9999)}")
     total = round(quantity * unit_price, 2)
 
     try:
-        conn = sqlite3.connect(str(ORDERS_DB))
-        conn.execute("""
+        execute(ORDERS_DB, """
             INSERT INTO orders (order_no, customer_id, product_id, product_name, color,
                                 quantity, unit_price, total, status, created_at,
                                 phone, address, delivery_date)
@@ -50,8 +54,6 @@ def create_order(customer_id: str, product_id: str, product_name: str,
         """, (order_no, customer_id, product_id, product_name, color,
               quantity, unit_price, total, now.isoformat(),
               phone, address, delivery_date))
-        conn.commit()
-        conn.close()
     except Exception:
         return "订单生成失败，请稍后重试。您的需求已记录，销售同事会尽快联系您。"
 

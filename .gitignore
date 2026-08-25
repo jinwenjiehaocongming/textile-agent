@@ -11,6 +11,8 @@ textile_knowledge.txt
 dump.rdb
 .claude/
 *.pkl
+*.db-wal
+*.db-shm
 !index/bm25_index.pkl
 .DS_Store
 .vscode/
@@ -28,3 +30,4 @@ scripts/serper_search.py
 
 # 个人学习笔记（不上传）
 MCP_MIGRATION_GUIDE.md
+.pytest_cache/

@@ -18,12 +18,18 @@ logger = get_logger(__name__)
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from src.mcp_client import get_mcp
+from src.llm_utils import _safe_llm
+from src.render_tools import (
+    RENDER_TOOLS, RENDER_TOOL_NAMES, RENDER_PROMPT_HINT,
+    attach_render_data, find_render_data_in_msgs,
+)
 
 after_sales_llm = ChatOpenAI(
     api_key=os.getenv("DEEPSEEK_API_KEY"),
     base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
-    model="deepseek-v4-flash",
+    model=os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"),
     temperature=0,
+    max_retries=2, timeout=30,
 )
 
 # ============================================================
@@ -91,9 +97,9 @@ def after_sales_node(messages: list) -> AIMessage:
     """售后 Agent 的对话节点。工具通过 MCP Client 自动发现。"""
     mcp = get_mcp()
 
-    # 售后只绑查订单 + 创建退款
+    # 售后只绑查订单 + 创建退款 + 展示工具
     llm_with_tools = after_sales_llm.bind_tools(
-        mcp.get_tools_for_langchain(["query_order", "create_refund"])
+        mcp.get_tools_for_langchain(["query_order", "create_refund"]) + RENDER_TOOLS
     )
 
     # 对话历史作为真正的 message 列表传入（不再拼进 system prompt）
@@ -104,27 +110,34 @@ def after_sales_node(messages: list) -> AIMessage:
     ]
 
     conversation = [
-        SystemMessage(content=AFTER_SALES_PROMPT),
+        SystemMessage(content=AFTER_SALES_PROMPT + "\n" + RENDER_PROMPT_HINT),
         *history_msgs,
         HumanMessage(content="请处理客户的售后需求。"),
     ]
 
     for _ in range(5):
-        response = llm_with_tools.invoke(conversation)
+        response = _safe_llm(llm_with_tools, conversation,
+                             fallback=AIMessage(content="系统繁忙，请稍后重试。您的售后需求已记录，客服会尽快联系您。"),
+                             stream_tokens=True)  # 真流式：回复 token 逐字推给 SSE
         conversation.append(response)
 
         if hasattr(response, "tool_calls") and response.tool_calls:
             tool_msgs = []
             for tc in response.tool_calls:
                 name, args = tc["name"], tc["args"]
+                # 展示工具是数据透传协议，不执行
+                if name in RENDER_TOOL_NAMES:
+                    tool_msgs.append(ToolMessage(content="", tool_call_id=tc["id"]))
+                    continue
                 result = mcp.call_tool(name, args)
                 logger.info(f"[售后] {name}({args})")
                 tool_msgs.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
             conversation.extend(tool_msgs)
 
             if any(tc["name"] == "create_refund" for tc in response.tool_calls):
-                return tool_msgs[-1]
+                tool_msg = tool_msgs[-1]
+                return attach_render_data(tool_msg, find_render_data_in_msgs(conversation))
         else:
-            return response
+            return attach_render_data(response, find_render_data_in_msgs(conversation))
 
     return AIMessage(content="售后处理超时，请稍后重试或转人工客服。")

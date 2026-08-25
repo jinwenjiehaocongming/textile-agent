@@ -69,3 +69,40 @@ def test_search_product_found(tmp_products_db):
 
 def test_search_product_no_match(tmp_products_db):
     assert "未找到匹配产品" in search_product("不存在的面料xyz")
+
+
+def test_concurrent_create_order(tmp_orders_db):
+    """P0-3 验收：并发写入不报 database is locked（WAL + busy_timeout 生效）。
+
+    8 线程 × 10 单并发写同一 orders.db，要求：
+    1. 全部成功（无"失败"文案）；
+    2. 订单号不撞 UNIQUE（随机后缀）；
+    3. 行数与写次数一致。
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    def worker(i: int) -> str:
+        return create_order(
+            customer_id=f"c{i % 5}",
+            product_id="P001",
+            product_name="T400 复合弹力布",
+            color="黑色",
+            quantity=100,
+            unit_price=13.2,
+        )
+
+    N_WORKERS, N_EACH = 8, 10
+    with ThreadPoolExecutor(max_workers=N_WORKERS) as ex:
+        results = list(ex.map(worker, range(N_WORKERS * N_EACH)))
+
+    assert all("订单已生成" in r for r in results), \
+        f"{sum('失败' in r for r in results)}/{len(results)} 单失败"
+    cnt = sqlite3.connect(str(tmp_orders_db)).execute(
+        "SELECT COUNT(*) FROM orders"
+    ).fetchone()[0]
+    assert cnt == N_WORKERS * N_EACH
+    # 订单号唯一性
+    rows = sqlite3.connect(str(tmp_orders_db)).execute(
+        "SELECT order_no, COUNT(*) c FROM orders GROUP BY order_no HAVING c > 1"
+    ).fetchall()
+    assert rows == []

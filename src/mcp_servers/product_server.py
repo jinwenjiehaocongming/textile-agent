@@ -11,9 +11,13 @@
 """
 
 import json
-import sqlite3
 import sys
 from pathlib import Path
+
+try:
+    from sqlite_utils import query_all  # 纯脚本运行（sys.path[0] = src/mcp_servers/）
+except ImportError:
+    from src.mcp_servers.sqlite_utils import query_all  # 包方式导入（测试/项目内）
 
 DB_PATH = Path(__file__).parent.parent.parent / "data" / "products.db"
 
@@ -26,9 +30,6 @@ def search_product(query: str) -> str:
         return "请输入产品名、颜色或品类关键词。"
 
     try:
-        conn = sqlite3.connect(str(DB_PATH))
-        conn.row_factory = sqlite3.Row
-
         where_parts = []
         params = []
         for kw in keywords:
@@ -36,10 +37,11 @@ def search_product(query: str) -> str:
             where_parts.append("(name LIKE ? OR color LIKE ? OR category LIKE ?)")
             params.extend([p, p, p])
 
-        rows = conn.execute(
+        rows = query_all(
+            DB_PATH,
             f"SELECT * FROM products WHERE {' OR '.join(where_parts)} LIMIT 50",
             params,
-        ).fetchall()
+        )
 
         if not rows:
             # Bigram 回退
@@ -55,12 +57,11 @@ def search_product(query: str) -> str:
                     p = f"%{fg}%"
                     where_parts.append("(name LIKE ? OR color LIKE ? OR category LIKE ?)")
                     params.extend([p, p, p])
-                rows = conn.execute(
+                rows = query_all(
+                    DB_PATH,
                     f"SELECT * FROM products WHERE {' OR '.join(where_parts)} LIMIT 50",
                     params,
-                ).fetchall()
-
-        conn.close()
+                )
 
         if not rows:
             return "未找到匹配产品。请尝试直接用面料名称（如 T400、牛津布、春亚纺、尼丝纺）搜索。"

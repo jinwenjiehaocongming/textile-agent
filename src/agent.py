@@ -23,6 +23,8 @@ import json, re, sys
 from pathlib import Path
 from typing import TypedDict, List
 from langgraph.graph import StateGraph, END
+from langgraph.types import Command
+from langgraph.checkpoint.memory import MemorySaver
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
 from langsmith import traceable
@@ -35,35 +37,25 @@ from src.order_agent import order_agent_node as order_agent
 from src.after_sales_agent import after_sales_node as after_sales_agent_fn
 from src.memory import get_user
 from src.mcp_client import init_mcp, get_mcp
+from src.render_tools import RENDER_TOOLS, RENDER_TOOL_NAMES, RENDER_PROMPT_HINT
 
 load_dotenv()
 from src.logging_config import get_logger
+from src.llm_utils import _safe_llm
 logger = get_logger(__name__)
 
 # ============================================================
 # 0. 配置
 # ============================================================
-import time as _time
+# LLM 调用统一走 src.llm_utils._safe_llm（重试 → 降级 → 保底）
 
-def _safe_llm(llm_inst, messages, fallback=None):
-    """重试2次（1s/2s）→ 降级 → 保底。所有LLM调用的统一入口。"""
-    for i in range(3):
-        try:
-            return llm_inst.invoke(messages)
-        except Exception as e:
-            if i < 2:
-                _time.sleep(i + 1)
-            else:
-                if fallback is not None:
-                    logger.warning(f"LLM 降级: {str(e)[:60]}")
-                    return fallback
-                raise
+# 主 LLM：Agent 对话用 DeepSeek（模型名可从 .env 的 DEEPSEEK_MODEL 覆盖，官方 API 用 deepseek-chat）
+_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
 
-# 主 LLM：Agent 对话用 DeepSeek
 llm = ChatOpenAI(
     api_key=os.getenv("DEEPSEEK_API_KEY"),
     base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
-    model="deepseek-v4-flash", temperature=0.3,
+    model=_MODEL, temperature=0.3,
     max_retries=2, timeout=30,
 )
 
@@ -71,7 +63,7 @@ llm = ChatOpenAI(
 cheap_llm = ChatOpenAI(
     api_key=os.getenv("DEEPSEEK_API_KEY"),
     base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
-    model="deepseek-v4-flash", temperature=0.1,
+    model=_MODEL, temperature=0.1,
     max_retries=2, timeout=15,
 )
 
@@ -245,12 +237,17 @@ SYSTEM_PROMPT = """你是【宏润纺织】的 AI 客服。工厂主营化纤面
 5. 简洁专业，用中文
 6. 不要把思考过程说出来。不要说任何 "我来帮你查一下""好的让我确认一下" 之类描述你正在做什么的废话。直接给出结果。
 7. 用户说"好的""谢谢""知道了"时，只需简短回应。不要重复展示订单号或订单详情——订单已经完成了
+8. 【知识/推荐类问题】客户问"推荐什么面料""用什么面料""面料怎么选""哪个适合"时，
+   先用检索知识直接给出面料类型结论（并举 1-2 个例子），**不要急着调 search_product 报价**；
+   客户明确要价格/现货/下单时再查工具。
 
 ## 面料知识参考
 {knowledge}
 
 ## 客户历史档案
-{user_context}"""
+{user_context}
+
+{RENDER_HINT}"""
 
 
 def agent_node(state: AgentState) -> dict:
@@ -263,12 +260,14 @@ def agent_node(state: AgentState) -> dict:
     user_context = state.get("user_context", "")
     system = SystemMessage(content=SYSTEM_PROMPT.format(
         knowledge=knowledge_text,
-        user_context=user_context or "（新客户，暂无历史档案）"
+        user_context=user_context or "（新客户，暂无历史档案）",
+        RENDER_HINT=RENDER_PROMPT_HINT,
     ))
     # MCP 动态工具发现：售前只用查产品 + 查订单
     mcp = get_mcp()
     mcp_tools = mcp.get_tools_for_langchain(["search_product", "query_order_status"])
-    llm_with_tools = llm.bind_tools(mcp_tools)
+    # 绑定展示工具（结构化 JSON 输出，供前端表格渲染）
+    llm_with_tools = llm.bind_tools(mcp_tools + RENDER_TOOLS)
     # 过滤孤立的 ToolMessage（订单结果等），避免 API 报错
     safe = []
     pending = 0
@@ -285,7 +284,8 @@ def agent_node(state: AgentState) -> dict:
         else:
             safe.append(m)
     response = _safe_llm(llm_with_tools, [system] + safe,
-        fallback=AIMessage(content="系统繁忙，请稍后重试。如有紧急需求请联系销售经理。"))
+        fallback=AIMessage(content="系统繁忙，请稍后重试。如有紧急需求请联系销售经理。"),
+        stream_tokens=True)  # 真流式：最终回复 token 逐字推给 SSE
     if hasattr(response, "tool_calls") and response.tool_calls:
         logger.info(f"[Agent] 工具调用: {[(tc['name'], tc['args']) for tc in response.tool_calls]}")
     else:
@@ -303,6 +303,11 @@ def tool_executor(state: AgentState) -> dict:
     results = []
     for tc in last_msg.tool_calls:
         name, args = tc["name"], tc["args"]
+        # 展示工具是"数据透传协议"，不真正执行
+        if name in RENDER_TOOL_NAMES:
+            logger.debug(f"[工具] {name} (render, 跳过执行)")
+            results.append(ToolMessage(content="", tool_call_id=tc["id"]))
+            continue
         logger.info(f"[工具] {name}({args})")
         result = get_mcp().call_tool(name, args)
         logger.debug(f"[工具] {name} 结果: {result}")
@@ -456,7 +461,12 @@ def agent_router(state: AgentState) -> str:
 # ============================================================
 # 9. 建图
 # ============================================================
-def build_graph():
+def thread_config(user_id: str) -> dict:
+    """每个用户的图执行配置：thread_id = user_id（HITL interrupt 依赖它定位会话）。"""
+    return {"configurable": {"thread_id": user_id}}
+
+
+def build_graph(checkpointer=None):
     builder = StateGraph(AgentState)
 
     builder.add_node("query_reformulator", query_reformulator)
@@ -491,7 +501,11 @@ def build_graph():
     builder.add_edge("order_agent", "review")
     builder.add_edge("after_sales_agent", "review")
 
-    return builder.compile()
+    # checkpointer：HITL 下单审批依赖（interrupt 挂起/恢复）。进程内 MemorySaver，
+    # 生产换持久化后端（Postgres 等）。显式传入的 checkpointer 优先。
+    if checkpointer is None:
+        checkpointer = MemorySaver()
+    return builder.compile(checkpointer=checkpointer)
 
 
 # ============================================================
@@ -548,6 +562,8 @@ def main():
                 break
             if user_input.lower() == "reset":
                 memory.clear_history()
+                from src.approval import remove_pending
+                remove_pending(user_id)  # 重置是新的会话，作废挂起的审批
                 state = {"messages": [], "knowledge_chunks": [], "rewrite_query": "",
                          "query_type": "chat", "user_id": user_id, "user_context": ""}
                 print("🔄 对话记录已清除")
@@ -557,23 +573,36 @@ def main():
             state["knowledge_chunks"] = []
             state["rewrite_query"] = ""
 
-            result = app.invoke(state)
-            state = result
+            result = app.invoke(state, config=thread_config(user_id))
+            if "__interrupt__" in result:
+                # ── HITL：下单挂起，等待人工审批 ──
+                for it in result["__interrupt__"]:
+                    val = it.value if hasattr(it, "value") else it
+                    if isinstance(val, dict) and val.get("type") == "order_approval":
+                        draft = val.get("draft", {})
+                        print(f"\n⏸ 订单待人工审批: {draft.get('product_name')} x{draft.get('quantity')}米 "
+                              f"¥{draft.get('unit_price')}/米 总价¥{draft.get('total')}")
+                        decision = input("审批 (y=通过 / n=拒绝[原因]): ").strip()
+                        approved = decision.lower().startswith("y")
+                        reason = "" if approved else decision[1:].strip()
+                        result = app.invoke(
+                            Command(resume={"approved": approved, "reason": reason}),
+                            config=thread_config(user_id),
+                        )
+                state = result
 
             print(f"\n🤖 客服: {result['messages'][-1].content}")
 
             # 存档本轮新消息
             memory.save_messages([HumanMessage(content=user_input), result["messages"][-1]])
 
-            # 异步提取偏好（后台线程，不阻塞）
-            import threading
-            threading.Thread(
-                target=memory.extract_and_store,
-                args=(state["messages"], cheap_llm),
-                daemon=True,
-            ).start()
+            # 异步提取偏好（有界任务队列，不阻塞主线程）
+            from src.task_queue import get_extraction_queue
+            get_extraction_queue().submit(memory.extract_and_store, state["messages"], cheap_llm)
     finally:
         mcp.shutdown()
+        from src.task_queue import get_extraction_queue
+        get_extraction_queue().shutdown()
 
 
 if __name__ == "__main__":

@@ -5,22 +5,24 @@
 售后 Agent 通过 MCP 协议调用。
 """
 import json
-import sqlite3
 import sys
 from pathlib import Path
 from datetime import datetime
+
+try:
+    from sqlite_utils import execute, query_one  # 纯脚本运行（sys.path[0] = src/mcp_servers/）
+except ImportError:
+    from src.mcp_servers.sqlite_utils import execute, query_one  # 包方式导入（测试/项目内）
 
 ORDERS_DB = Path(__file__).parent.parent.parent / "data" / "orders.db"
 
 
 def query_order(order_no: str) -> str:
     """查询订单详情（售后用，比 order_server 的版本多了地址电话）"""
-    conn = sqlite3.connect(str(ORDERS_DB))
-    conn.row_factory = sqlite3.Row
-    row = conn.execute(
-        "SELECT * FROM orders WHERE order_no = ?", (order_no,)
-    ).fetchone()
-    conn.close()
+    row = query_one(
+        ORDERS_DB,
+        "SELECT * FROM orders WHERE order_no = ?", (order_no,),
+    )
     if not row:
         return f"未找到订单 {order_no}"
     return (
@@ -34,16 +36,13 @@ def query_order(order_no: str) -> str:
 
 
 def create_refund(order_no: str, reason: str) -> str:
-    """创建退款工单"""
+    """创建退款工单。连接由 sqlite_utils 保证 finally 关闭（不泄漏）。"""
     now = datetime.now()
     try:
-        conn = sqlite3.connect(str(ORDERS_DB))
-        conn.execute(
+        execute(ORDERS_DB,
             "INSERT INTO refunds (order_no, reason, status, created_at) VALUES (?, ?, '待审核', ?)",
             (order_no, reason, now.isoformat()),
         )
-        conn.commit()
-        conn.close()
     except Exception:
         return "退款申请提交失败，请稍后重试。如需紧急处理请联系销售经理。"
     return (

@@ -18,12 +18,18 @@ logger = get_logger(__name__)
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from src.mcp_client import get_mcp
+from src.llm_utils import _safe_llm
+from src.render_tools import (
+    RENDER_TOOLS, RENDER_TOOL_NAMES, RENDER_PROMPT_HINT,
+    attach_render_data, find_render_data_in_msgs,
+)
 
 order_llm = ChatOpenAI(
     api_key=os.getenv("DEEPSEEK_API_KEY"),
     base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
-    model="deepseek-v4-flash",
+    model=os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"),
     temperature=0,
+    max_retries=2, timeout=30,
 )
 
 # ============================================================
@@ -61,7 +67,7 @@ def should_create_order(messages: list) -> bool:
         for m in messages[-8:]
     )
     try:
-        resp = order_llm.invoke([
+        resp = _safe_llm(order_llm, [
             HumanMessage(content=SUPERVISOR_PROMPT.format(history=history))
         ])
         return resp.content.strip().lower() == "yes"
@@ -106,6 +112,52 @@ ORDER_AGENT_PROMPT = """你是下单助手。根据对话历史处理订单。
 处理命令："""
 
 
+def _approve_then_create(args: dict, customer_id: str) -> str:
+    """
+    HITL：create_order 必经人工审批。
+    1) 组装确认单 draft，登记待审批（approval 注册表）
+    2) interrupt() 挂起图执行，等待审批人 approve/reject
+    3) 审批通过 → 真正调用 create_order 写库；拒绝 → 返回取消文案
+
+    LangGraph 重放语义：resume 时本函数会整体重跑，interrupt() 返回
+    resume 值；LLM 温度 0 保证重放时的对话决策一致（同输入同输出）。
+    """
+    from langgraph.types import interrupt
+    from src.approval import register_pending, remove_pending
+
+    quantity = args.get("quantity", 0)
+    unit_price = args.get("unit_price", 0)
+    try:
+        total = round(float(quantity) * float(unit_price), 2)
+    except (TypeError, ValueError):
+        total = ""
+
+    draft = {
+        "product_name": args.get("product_name", ""),
+        "product_id": args.get("product_id", ""),
+        "color": args.get("color", ""),
+        "quantity": quantity,
+        "unit_price": unit_price,
+        "total": total,
+        "phone": args.get("phone", ""),
+        "address": args.get("address", ""),
+        "delivery_date": args.get("delivery_date", ""),
+    }
+
+    register_pending(customer_id, customer_id, draft)
+    decision = interrupt({"type": "order_approval", "draft": draft})
+    remove_pending(customer_id)
+
+    approved = bool(decision and decision.get("approved"))
+    reason = (decision or {}).get("reason", "")
+    if approved:
+        from src.mcp_client import get_mcp
+        logger.warning(f"[下单Agent] 审批通过，写入订单: {args.get('product_name')}")
+        return get_mcp().call_tool("create_order", args)
+    extra = f"（原因：{reason}）" if reason else ""
+    return f"订单未通过人工审批，已取消{extra}。如有疑问请联系销售经理。"
+
+
 def order_agent_node(messages: list, customer_id: str = "guest") -> AIMessage:
     """
     下单 Agent：先查产品确认，再下单。
@@ -118,9 +170,9 @@ def order_agent_node(messages: list, customer_id: str = "guest") -> AIMessage:
     """
     mcp = get_mcp()
 
-    # 下单只绑查产品 + 创建订单
+    # 下单只绑查产品 + 创建订单 + 展示工具
     llm_with_tools = order_llm.bind_tools(
-        mcp.get_tools_for_langchain(["search_product", "create_order"])
+        mcp.get_tools_for_langchain(["search_product", "create_order"]) + RENDER_TOOLS
     )
 
     # 对话历史作为真正的 message 列表传入（不再拼进 system prompt）
@@ -132,14 +184,16 @@ def order_agent_node(messages: list, customer_id: str = "guest") -> AIMessage:
 
     # 构建对话消息：system（角色指令）+ 历史消息 + 处理指令
     conversation = [
-        SystemMessage(content=ORDER_AGENT_PROMPT.format(customer_id=customer_id)),
+        SystemMessage(content=ORDER_AGENT_PROMPT.format(customer_id=customer_id) + "\n" + RENDER_PROMPT_HINT),
         *history_msgs,
         HumanMessage(content="处理：刚才发过确认单 + 客户说确认 → 直接create_order。信息不齐 → 先查先问。"),
     ]
 
     # 最多 5 轮 ReAct（查产品 → 下单）
     for _ in range(5):
-        response = llm_with_tools.invoke(conversation)
+        response = _safe_llm(llm_with_tools, conversation,
+                             fallback=AIMessage(content="系统繁忙，请稍后重试。您的下单需求已记录，销售会尽快联系您。"),
+                             stream_tokens=True)  # 真流式：回复 token 逐字推给 SSE
         conversation.append(response)
 
         if hasattr(response, "tool_calls") and response.tool_calls:
@@ -147,14 +201,25 @@ def order_agent_node(messages: list, customer_id: str = "guest") -> AIMessage:
             tool_msgs = []
             for tc in response.tool_calls:
                 name, args = tc["name"], tc["args"]
+                # 展示工具是数据透传协议，不执行
+                if name in RENDER_TOOL_NAMES:
+                    tool_msgs.append(ToolMessage(content="", tool_call_id=tc["id"]))
+                    continue
+                if name == "create_order":
+                    # HITL：人工审批拦截（interrupt 挂起，审批通过才写库）
+                    result = _approve_then_create(args, customer_id)
+                    tool_msgs.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
+                    continue
                 result = mcp.call_tool(name, args)
                 logger.debug(f"[下单Agent] {name} 结果: {str(result)[:100]}...")
                 tool_msgs.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
             conversation.extend(tool_msgs)
 
-            # 如果刚才调了 create_order，直接返回订单结果
+            # 如果刚才调了 create_order，直接返回订单结果（附上 render 数据）
             if any(tc["name"] == "create_order" for tc in response.tool_calls):
-                return tool_msgs[-1]
+                tool_msg = tool_msgs[-1]
+                render_data = find_render_data_in_msgs(conversation)
+                return attach_render_data(tool_msg, render_data)
         else:
             # 没有工具调用 → 最终回复
             # 检查：如果 LLM 编造了订单号（没调 create_order 就说 "订单已生成"），
@@ -164,7 +229,8 @@ def order_agent_node(messages: list, customer_id: str = "guest") -> AIMessage:
                 logger.warning("[下单Agent] 检测到编造订单号，强制重试...")
                 conversation.append(HumanMessage(content="你刚才编了一个订单号。这是不允许的。你必须调用 create_order 工具来生成真实订单。请现在调用 create_order。"))
                 continue  # 回到 for 循环开头，再问 LLM
-            return response
+            render_data = find_render_data_in_msgs(conversation)
+            return attach_render_data(response, render_data)
 
     return AIMessage(content="下单流程超时，请稍后重试。")
 

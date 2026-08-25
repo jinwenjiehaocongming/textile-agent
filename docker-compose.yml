@@ -1,0 +1,31 @@
+# 纺织 B2B 智能客服 — docker compose
+# 用法：
+#   docker compose up --build          # 构建镜像并启动（首次构建会下载 HF 模型，较慢）
+#   docker compose up --build --build-arg DOWNLOAD_MODELS=0   # 跳过模型下载，容器内挂载 HF 缓存
+services:
+  app:
+    build:
+      context: .
+      args:
+        DOWNLOAD_MODELS: ${DOWNLOAD_MODELS:-1}
+    ports:
+      - "8005:8005"
+    env_file:
+      - .env
+    environment:
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+    volumes:
+      - ./data:/app/data            # 订单/产品/用户记忆持久化
+      - ./index:/app/index          # 检索索引（构建新索引可热更新）
+      - hf_cache:/root/.cache/huggingface  # 本地 embedding/rerank 模型缓存
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8005/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+
+volumes:
+  hf_cache:

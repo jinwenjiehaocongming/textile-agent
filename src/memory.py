@@ -6,7 +6,7 @@ Layer 2: SQLite — 对话历史永久存档
 Layer 3: ChromaDB — LLM 提取的结构化偏好
 """
 
-import sqlite3, json, threading
+import json, threading
 from pathlib import Path
 from datetime import datetime
 from typing import List, Optional
@@ -14,6 +14,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 from dotenv import load_dotenv
 import os, chromadb
 from chromadb.utils import embedding_functions
+from src.mcp_servers.sqlite_utils import execute, executescript, query_all, query_one
 
 load_dotenv()
 from src.logging_config import get_logger
@@ -35,24 +36,19 @@ class UserMemory:
     # SQLite 持久化
     # ============================================================
     def _init_db(self):
-        conn = sqlite3.connect(str(self.db_path))
-        conn.execute("""
+        executescript(self.db_path, """
             CREATE TABLE IF NOT EXISTS conversations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 role TEXT NOT NULL,
                 content TEXT NOT NULL,
                 created_at TEXT NOT NULL
-            )
-        """)
-        conn.execute("""
+            );
             CREATE TABLE IF NOT EXISTS profile (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
                 updated_at TEXT NOT NULL
-            )
+            );
         """)
-        conn.commit()
-        conn.close()
 
     def save_messages(self, new_messages: list):
         """保存消息到热缓存 + SQLite"""
@@ -61,13 +57,10 @@ class UserMemory:
                 # Layer 1: 写 Redis
                 _cache_append(self.user_id, {"role": m.type, "content": m.content})
                 # Layer 2: 写 SQLite
-                conn = sqlite3.connect(str(self.db_path))
-                conn.execute(
+                execute(self.db_path,
                     "INSERT INTO conversations (role, content, created_at) VALUES (?, ?, ?)",
                     (m.type, m.content, datetime.now().isoformat()),
                 )
-                conn.commit()
-                conn.close()
 
     def load_recent(self, n: int = 30) -> list:
         """加载最近 N 轮对话。先查 Redis，没有再查 SQLite。"""
@@ -83,11 +76,8 @@ class UserMemory:
             return messages
 
         # Layer 2: Redis 没命中 → 从 SQLite 补
-        conn = sqlite3.connect(str(self.db_path))
-        rows = conn.execute(
-            "SELECT role, content FROM conversations ORDER BY id DESC LIMIT ?", (n,)
-        ).fetchall()
-        conn.close()
+        rows = query_all(self.db_path,
+            "SELECT role, content FROM conversations ORDER BY id DESC LIMIT ?", (n,))
 
         messages = []
         for role, content in reversed(rows):
@@ -101,27 +91,18 @@ class UserMemory:
 
     def get_last_query_type(self) -> str:
         """获取上一轮对话模式，用于 Web 端状态延续"""
-        conn = sqlite3.connect(str(self.db_path))
-        row = conn.execute(
-            "SELECT value FROM profile WHERE key = 'last_query_type'"
-        ).fetchone()
-        conn.close()
+        row = query_one(self.db_path,
+            "SELECT value FROM profile WHERE key = 'last_query_type'")
         return row[0] if row else "chat"
 
     def save_last_query_type(self, qtype: str):
-        conn = sqlite3.connect(str(self.db_path))
-        conn.execute(
+        execute(self.db_path,
             "INSERT OR REPLACE INTO profile (key, value, updated_at) VALUES (?, ?, ?)",
             ("last_query_type", qtype, datetime.now().isoformat()),
         )
-        conn.commit()
-        conn.close()
 
     def clear_history(self):
-        conn = sqlite3.connect(str(self.db_path))
-        conn.execute("DELETE FROM conversations")
-        conn.commit()
-        conn.close()
+        execute(self.db_path, "DELETE FROM conversations")
         _cache_clear(self.user_id)
 
     # ============================================================
@@ -263,7 +244,23 @@ _dict_cache: dict[str, list] = {}
 _active_users: dict[str, UserMemory] = {}
 
 
+def sanitize_user_id(user_id: str, default: str = "guest") -> str:
+    """
+    校验并规范化 user_id（兜底层，规则见 src.user_identity）。
+    - 合法 → 原样返回
+    - 非法（空、超长、含路径分隔符等）→ 返回 default 并告警
+    Web 层应在请求边界拒绝非法 ID（返回 400）；本函数作为防御兜底，
+    保证任何入口（含 CLI agent.py）都不会把恶意 ID 拼进文件路径。
+    """
+    from src.user_identity import is_valid_user_id
+    if is_valid_user_id(user_id):
+        return user_id
+    logger.warning(f"[记忆] 非法 user_id 已降级为 '{default}': {user_id!r}")
+    return default
+
+
 def get_user(user_id: str) -> UserMemory:
+    user_id = sanitize_user_id(user_id)
     if user_id not in _active_users:
         _active_users[user_id] = UserMemory(user_id)
     return _active_users[user_id]

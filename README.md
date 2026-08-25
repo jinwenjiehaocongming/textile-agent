@@ -2,16 +2,21 @@
 
 基于 LangGraph 的多 Agent 纺织企业客服系统，支持产品查询、面料知识问答、下单、售后全流程。
 
+> 📖 改造后架构从零讲解见 [docs/UNDERSTANDING.md](docs/UNDERSTANDING.md)；生产化改造明细见 [PRODUCTION_MIGRATION_CHECKLIST.md](PRODUCTION_MIGRATION_CHECKLIST.md)。
+
 ## 特性
 
 - **多 Agent 架构** — Supervisor 三分支路由（售前 / 下单 / 售后），状态机 + LLM 意图分类
 - **混合检索 RAG** — ChromaDB 向量 + BM25 关键词 + RRF 融合 + CrossEncoder Rerank
 - **结构化产品查询** — SQLite 281 条产品，关键词匹配 + 计分排序
-- **完整下单流程** — 查产品 → 展示确认单 → 客户确认 → 写入订单
+- **HITL 支付审批** — 下单经 LangGraph `interrupt` 挂起，销售人工审批通过才写库（`/approval/approve|reject`）
+- **节点事件流式** — 图执行过程（改写→检索→路由→应答→审核）经 SSE 实时推给前端
+- **完整下单流程** — 查产品 → 人工审批 → 写入订单
 - **售后处理** — 查订单 → 对照退货规则 → 生成退款工单
 - **双层审核** — 规则快速拦截 + LLM 安全审查
 - **三层记忆** — Redis 热缓存 + SQLite 持久化 + ChromaDB 偏好提取
-- **评估体系** — 检索消融评测 85 题 + 端到端评测 11 题
+- **多用户隔离** — `X-User-Id` 请求头按用户隔离历史/偏好/订单（`src/user_identity.py` 单一校验源）
+- **评估体系** — 检索消融评测 85 题 + 端到端规则评测 11 题 + LLM-as-Judge 四维评分 (11/11)
 
 ## 快速开始
 
@@ -34,17 +39,20 @@ python app.py
 # 打开 http://127.0.0.1:8003
 ```
 
+> 多用户：Web 请求带请求头 `X-User-Id`（前端自动处理）；非法值返回 400，缺省降级 `guest`。
+
 ## 架构
 
 ```
 入口 → 改写查询 → 知识检索 → Supervisor → 售前 Agent → 审核 → END
-                                         → 下单 Agent → 审核 → END
-                                         → 售后 Agent → 审核 → END
+                                          → 下单 Agent ─⛔ interrupt 挂起──→ 人工审批 → create_order → 审核 → END
+                                          → 售后 Agent → 审核 → END
 
 数据库: products.db (281条面料) + orders.db (订单+退款)
 知识库: knowledge.txt (48条结构化chunk)
 Embedding: BAAI/bge-base-zh-v1.5 (本地, 免费)
 Rerank: BAAI/bge-reranker-base (本地 CrossEncoder)
+执行过程: 每个节点经 SSE 实时推给前端（节点事件流式）
 ```
 
 ## 评估
@@ -53,9 +61,26 @@ Rerank: BAAI/bge-reranker-base (本地 CrossEncoder)
 |------|:--:|
 | 检索 Hit@3 | 100% |
 | 检索 MRR | 0.951 |
-| 端到端通过率 | 100% (11/11) |
+| 端到端通过率（规则断言） | 100% (11/11) |
+| LLM-as-Judge 通过率 | 100% (11/11) |
+| Judge 维度均分 | relevance 5.0 / completeness 4.55 / factual 5.0 / safety 5.0 / overall 4.82 |
 
 详见 [EVALUATION.md](EVALUATION.md)
+
+## 部署
+
+```bash
+# Docker（首次构建下载本地推理模型约 600MB）
+docker compose up --build
+
+# 跳过模型下载，挂载本地 HF 缓存
+docker compose up --build --build-arg DOWNLOAD_MODELS=0 \
+  -v ~/.cache/huggingface:/root/.cache/huggingface
+```
+
+- 健康检查：`GET /healthz`（存活 + 任务队列计量）
+- 审批端点：`GET /approval/pending`、`POST /approval/approve`、`POST /approval/reject`
+- CI：`.github/workflows/ci.yml`（push/PR 自动跑测试 + 前端构建）
 
 ## 日志与追踪
 
@@ -84,18 +109,27 @@ Rerank: BAAI/bge-reranker-base (本地 CrossEncoder)
 
 ```
 src/
-├── agent.py              主图 + 售前 Agent
-├── order_agent.py         下单 Agent
+├── agent.py              主图 + 售前 Agent（编译带 checkpointer，HITL 依赖）
+├── order_agent.py         下单 Agent（create_order 前人工审批）
 ├── after_sales_agent.py   售后 Agent
 ├── retrieval.py           混合检索器
-├── memory.py             用户记忆系统
+├── memory.py              用户记忆系统
+├── mcp_client.py          MCP 客户端（线程安全 + 崩溃自愈）
+├── stream_chat.py         SSE：节点事件流 + 最终回复 + 挂起事件
+├── user_identity.py       user_id 校验（单一事实来源）【新】
+├── approval.py            待审批订单注册表（HITL）【新】
+├── task_queue.py          有界任务队列（替代裸线程）【新】
+├── node_events.py         图节点事件描述（流式可视化）【新】
+├── eval_cases.py          端到端评测共享用例集 【新】
 ├── logging_config.py      统一日志配置
-├── mcp_client.py          MCP 客户端 (JSON-RPC over stdio)
-└── mcp_servers/           工具服务层 (product/order/refund)
+└── mcp_servers/           工具服务层 (product/order/refund + sqlite_utils 共享层)
 scripts/
 ├── build_index.py         构建索引
 ├── eval_retrieval.py      检索消融评测 (85题)
-└── eval_agent.py          端到端评测 (11题)
+├── eval_agent.py          端到端规则评测 (11题)
+└── eval_judge.py          LLM-as-Judge 四维评分评测 【新】
+docker-compose.yml / Dockerfile / .github/workflows/ci.yml   部署与 CI 【新】
+docs/UNDERSTANDING.md      改造后架构从零讲解 【新】
 index/                    索引文件 (auto-gen)
 data/
 ├── knowledge.txt          纺织知识库

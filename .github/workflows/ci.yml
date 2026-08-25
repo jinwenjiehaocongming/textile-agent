@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 缓存 HF 模型（避免每次 CI 重复下载 600MB）
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ runner.os }}-bge-v1
+
+      - name: 安装后端依赖
+        run: pip install -r requirements.txt
+
+      - name: 构建前端（验证 web/ 可编译）
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: 单元测试
+        run: python -m pytest tests/ -q
+
+      - name: 语法检查
+        run: |
+          python -m py_compile app.py src/agent.py src/stream_chat.py
