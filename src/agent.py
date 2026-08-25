@@ -13,10 +13,15 @@
 运行: python src/agent.py
 """
 
-# 离线模式：必须在所有 import 之前，否则 chromadb/huggingface_hub 会联网
+# 离线模式：必须在所有 import 之前设置。
+# 本机已有模型缓存 → 强制离线（免费、快、不联网）；
+# 缓存缺失（如 CI 首次运行）→ 允许自动下载，否则"离线模式+空缓存"会加载失败。
 import os
-os.environ["HF_HUB_OFFLINE"] = "1"
-os.environ["TRANSFORMERS_OFFLINE"] = "1"
+from pathlib import Path
+
+if Path(os.path.expanduser("~/.cache/huggingface")).exists():
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
 import readline  # 修复终端中文输入退格残留
 import json, re, sys
