@@ -1,11 +1,17 @@
-fastapi
-uvicorn
-langgraph
-langchain
-langchain-openai
-langchain-core
-chromadb
-sentence-transformers
-openai
-python-dotenv
-pydantic
+# ⚠️ 版本已锁定：本文件必须在本地验证全绿后才能修改（pytest 66 passed）
+# 升级步骤：改版本号 → 本地 python -m pytest tests/ -q 全绿 → push（CI 自动复验）
+# 历史事故：未锁版本导致 CI 装到 langgraph 1.x / langchain-core 1.x，
+# 与 0.6.x 语义的代码不兼容，pytest 全挂。教训：LLM/图框架发版激进，必须锁。
+
+fastapi==0.128.8
+uvicorn==0.39.0
+langgraph==0.6.11
+langchain-openai==0.3.35
+langchain-core==0.3.86
+langsmith==0.4.37
+chromadb==1.5.9
+sentence-transformers==5.1.2
+torch==2.8.0
+openai==2.44.0
+python-dotenv==1.2.1
+pydantic==2.13.4
