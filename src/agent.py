@@ -55,22 +55,34 @@ logger = get_logger(__name__)
 # LLM 调用统一走 src.llm_utils._safe_llm（重试 → 降级 → 保底）
 
 # 主 LLM：Agent 对话用 DeepSeek（模型名可从 .env 的 DEEPSEEK_MODEL 覆盖，官方 API 用 deepseek-chat）
+# 懒加载：import 模块时绝不实例化 LLM（实例化需要 API key，CI/无 .env 环境会导入即崩）。
+# 首次访问 llm / cheap_llm 属性时才创建（PEP 562 模块级 __getattr__）。
 _MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
 
-llm = ChatOpenAI(
-    api_key=os.getenv("DEEPSEEK_API_KEY"),
-    base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
-    model=_MODEL, temperature=0.3,
-    max_retries=2, timeout=30,
-)
+_llm = None
+_cheap_llm = None
 
-# 辅助 LLM：改写 + 审核 + Supervisor
-cheap_llm = ChatOpenAI(
-    api_key=os.getenv("DEEPSEEK_API_KEY"),
-    base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
-    model=_MODEL, temperature=0.1,
-    max_retries=2, timeout=15,
-)
+
+def _make_llm(temperature: float, timeout: int) -> ChatOpenAI:
+    return ChatOpenAI(
+        api_key=os.getenv("DEEPSEEK_API_KEY"),
+        base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
+        model=_MODEL, temperature=temperature,
+        max_retries=2, timeout=timeout,
+    )
+
+
+def __getattr__(name: str):
+    global _llm, _cheap_llm
+    if name == "llm":
+        if _llm is None:
+            _llm = _make_llm(temperature=0.3, timeout=30)
+        return _llm
+    if name == "cheap_llm":
+        if _cheap_llm is None:
+            _cheap_llm = _make_llm(temperature=0.1, timeout=15)
+        return _cheap_llm
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 retriever = HybridRetriever()
 

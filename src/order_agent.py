@@ -24,13 +24,23 @@ from src.render_tools import (
     attach_render_data, find_render_data_in_msgs,
 )
 
-order_llm = ChatOpenAI(
-    api_key=os.getenv("DEEPSEEK_API_KEY"),
-    base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
-    model=os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"),
-    temperature=0,
-    max_retries=2, timeout=30,
-)
+# 下单 LLM：懒加载（import 不实例化，避免无 .env 环境导入即崩）
+_order_llm = None
+
+
+def __getattr__(name: str):
+    global _order_llm
+    if name == "order_llm":
+        if _order_llm is None:
+            _order_llm = ChatOpenAI(
+                api_key=os.getenv("DEEPSEEK_API_KEY"),
+                base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
+                model=os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"),
+                temperature=0,
+                max_retries=2, timeout=30,
+            )
+        return _order_llm
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # ============================================================
 # 工具已移至 MCP Server
