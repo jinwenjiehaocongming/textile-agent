@@ -209,7 +209,23 @@ async def chat_stream(req: ChatRequest, request: Request):
     )
 
 
-# ── 新前端（web/dist 构建产物）：必须在所有 API 路由之后挂载，避免吞掉 /chat 等接口 ──
+# ── /api 前缀兼容：web/dist 生产前端请求 /api/xxx（vite 开发代理剥前缀后也是后端无前缀路由）──
+# 与上方无前缀路由共享同一组 handler，仅路径不同
+# ⚠️ 必须注册在静态 mount 之前（Starlette 按注册顺序匹配）
+from fastapi import APIRouter
+
+_api = APIRouter(prefix="/api")
+_api.post("/chat")(chat)
+_api.get("/history")(get_history)
+_api.get("/approval/pending")(approval_pending)
+_api.post("/approval/approve")(approval_approve)
+_api.post("/approval/reject")(approval_reject)
+_api.get("/healthz")(healthz)
+_api.post("/chat/stream")(chat_stream)
+app.include_router(_api)
+
+
+# ── 新前端（web/dist 构建产物）：必须最后挂载，避免吞掉 /chat /api 等接口 ──
 # 开发模式用 vite dev（cd web && npm run dev → http://localhost:5173，/api 代理到本服务）
 _DIST = Path(__file__).parent / "web" / "dist"
 if _DIST.exists():
