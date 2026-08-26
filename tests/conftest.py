@@ -35,16 +35,30 @@ SEED_PRODUCTS = [
 
 @pytest.fixture(scope="session", autouse=True)
 def ensure_test_db():
-    """幂等创建 study1_test 测试库（不存在才创建）。"""
+    """幂等创建测试库（不存在才创建）。
+
+    凭据从 TEST_DATABASE_URL 解析，兼容本机（rain 无密码）与 CI（postgres/postgres）。
+    """
     import asyncpg
+    from urllib.parse import urlparse
+
+    _u = urlparse(TEST_DATABASE_URL)
+    _dbname = _u.path.lstrip("/") or "study1_test"
 
     async def _ensure():
-        conn = await asyncpg.connect(host="localhost", port=5432, user="rain", database="postgres")
+        conn = await asyncpg.connect(
+            host=_u.hostname or "localhost",
+            port=_u.port or 5432,
+            user=_u.username or "postgres",
+            password=_u.password,
+            database="postgres",
+        )
         try:
             exists = await conn.fetchval(
-                "SELECT 1 FROM pg_database WHERE datname = 'study1_test'")
+                "SELECT 1 FROM pg_database WHERE datname = $1", _dbname)
             if not exists:
-                await conn.execute("CREATE DATABASE study1_test")
+                await conn.execute(
+                    f'CREATE DATABASE "{_dbname}"')
         finally:
             await conn.close()
 

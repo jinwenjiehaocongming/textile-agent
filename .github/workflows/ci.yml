@@ -8,12 +8,30 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      # 企业级演进（2026-08）：测试连 PostgreSQL（conftest 从 TEST_DATABASE_URL 解析凭据建库）
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/study1_test
+      HF_HUB_OFFLINE: "0"
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: pip
 
       - name: 缓存 HF 模型（避免每次 CI 重复下载 600MB）
@@ -32,6 +50,8 @@ jobs:
           npm run build
 
       - name: 单元测试
+        # Qdrant 用 LocalMode（index/qdrant_storage 随仓库提交），无需起 Qdrant 服务；
+        # 首次跑会下载 embedding 模型（有缓存 key 加速），测试加载较慢属正常
         run: python -m pytest tests/ -q
 
       - name: 语法检查
