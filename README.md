@@ -7,28 +7,34 @@
 ## 特性
 
 - **多 Agent 架构** — Supervisor 三分支路由（售前 / 下单 / 售后），状态机 + LLM 意图分类
-- **混合检索 RAG** — ChromaDB 向量 + BM25 关键词 + RRF 融合 + CrossEncoder Rerank
-- **结构化产品查询** — SQLite 281 条产品，关键词匹配 + 计分排序
+- **混合检索 RAG** — Qdrant 向量 + BM25 关键词 + RRF 融合 + CrossEncoder Rerank（企业级演进：ChromaDB → Qdrant，LocalMode/独立服务一份代码）
+- **结构化产品查询** — PostgreSQL 281 条产品（SQLAlchemy async + asyncpg 连接池）
 - **HITL 支付审批** — 下单经 LangGraph `interrupt` 挂起，销售人工审批通过才写库（`/approval/approve|reject`）
 - **节点事件流式** — 图执行过程（改写→检索→路由→应答→审核）经 SSE 实时推给前端
 - **完整下单流程** — 查产品 → 人工审批 → 写入订单
 - **售后处理** — 查订单 → 对照退货规则 → 生成退款工单
 - **双层审核** — 规则快速拦截 + LLM 安全审查
-- **三层记忆** — Redis 热缓存 + SQLite 持久化 + ChromaDB 偏好提取
+- **三层记忆** — Redis 热缓存（可选）+ PostgreSQL 对话存档（user_id 行级隔离）+ Qdrant 长期偏好
 - **多用户隔离** — `X-User-Id` 请求头按用户隔离历史/偏好/订单（`src/user_identity.py` 单一校验源）
+- **官方 MCP SDK** — 自研客户端演进迁移官方 `mcp` SDK（ClientSession + stdio_client 异步），三个 Server 用 FastMCP 重写
+- **全链路异步** — LangGraph `ainvoke`、节点 async、LLM `astream` 单事件循环（企业级演进）
 - **评估体系** — 检索消融评测 85 题 + 端到端规则评测 11 题 + LLM-as-Judge 四维评分 (11/11)
 
 ## 快速开始
 
 ```bash
-# 1. 安装依赖
+# 0. 前置：PostgreSQL（本机默认当前系统用户）与 .env
+#    - 业务库：postgresql+asyncpg://<用户>@localhost:5432/study1（不设 DATABASE_URL 时默认）
+#    - 向量库：Qdrant 用 LocalMode（index/qdrant_storage，零外部服务）；生产设 QDRANT_URL 指向独立服务
+#    - .env 里配 DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL
+
+# 1. 安装依赖（Python >= 3.10，建议 3.12）
 pip install -r requirements.txt
 
-# 2. 配置 .env（DeepSeek API Key）
-echo 'DEEPSEEK_API_KEY=sk-xxx' > .env
-echo 'DEEPSEEK_BASE_URL=https://api.deepseek.com/v1' >> .env
+# 2. 初始化 PostgreSQL 业务库（建表 + 迁移 SQLite 旧数据，幂等）
+python scripts/migrate_sqlite_to_pg.py
 
-# 3. 构建知识库索引
+# 3. 构建知识库索引（写入 Qdrant，bge-base-zh 本地模型）
 python scripts/build_index.py
 
 # 4. 终端运行
@@ -36,7 +42,7 @@ python src/agent.py
 
 # 5. Web 界面
 python app.py
-# 打开 http://127.0.0.1:8003
+# 打开 http://127.0.0.1:8005
 ```
 
 > 多用户：Web 请求带请求头 `X-User-Id`（前端自动处理）；非法值返回 400，缺省降级 `guest`。
@@ -48,8 +54,8 @@ python app.py
                                           → 下单 Agent ─⛔ interrupt 挂起──→ 人工审批 → create_order → 审核 → END
                                           → 售后 Agent → 审核 → END
 
-数据库: products.db (281条面料) + orders.db (订单+退款)
-知识库: knowledge.txt (48条结构化chunk)
+数据库: PostgreSQL（study1 库：products 281条 / orders / refunds / conversations / profile）
+知识库: Qdrant 集合 textile_knowledge（142 条结构化 chunk）+ BM25 索引
 Embedding: BAAI/bge-base-zh-v1.5 (本地, 免费)
 Rerank: BAAI/bge-reranker-base (本地 CrossEncoder)
 执行过程: 每个节点经 SSE 实时推给前端（节点事件流式）
@@ -60,7 +66,7 @@ Rerank: BAAI/bge-reranker-base (本地 CrossEncoder)
 | 指标 | 得分 |
 |------|:--:|
 | 检索 Hit@3 | 100% |
-| 检索 MRR | 0.951 |
+| 检索 MRR（混合+Rerank，Qdrant 版） | 0.959 |
 | 端到端通过率（规则断言） | 100% (11/11) |
 | LLM-as-Judge 通过率 | 100% (11/11) |
 | Judge 维度均分 | relevance 5.0 / completeness 4.55 / factual 5.0 / safety 5.0 / overall 4.82 |
@@ -112,28 +118,32 @@ src/
 ├── agent.py              主图 + 售前 Agent（编译带 checkpointer，HITL 依赖）
 ├── order_agent.py         下单 Agent（create_order 前人工审批）
 ├── after_sales_agent.py   售后 Agent
-├── retrieval.py           混合检索器
-├── memory.py              用户记忆系统
-├── mcp_client.py          MCP 客户端（线程安全 + 崩溃自愈）
+├── retrieval.py           混合检索器（Qdrant + BM25 + RRF + Rerank）
+├── vector_store.py        Qdrant 访问层（LocalMode / 独立服务双模式）【新】
+├── db.py                  PostgreSQL 访问层（SQLAlchemy async + asyncpg 连接池）【新】
+├── memory.py              用户记忆系统（Redis 热缓存 + PG 存档 + Qdrant 偏好）
+├── mcp_client.py          MCP 客户端（官方 mcp SDK：ClientSession + stdio_client 异步）
 ├── stream_chat.py         SSE：节点事件流 + 最终回复 + 挂起事件
-├── user_identity.py       user_id 校验（单一事实来源）【新】
-├── approval.py            待审批订单注册表（HITL）【新】
-├── task_queue.py          有界任务队列（替代裸线程）【新】
-├── node_events.py         图节点事件描述（流式可视化）【新】
-├── eval_cases.py          端到端评测共享用例集 【新】
+├── user_identity.py       user_id 校验（单一事实来源）
+├── approval.py            待审批订单注册表（HITL）
+├── task_queue.py          有界任务队列（替代裸线程）
+├── node_events.py         图节点事件描述（流式可视化）
+├── eval_cases.py          端到端评测共享用例集
 ├── logging_config.py      统一日志配置
-└── mcp_servers/           工具服务层 (product/order/refund + sqlite_utils 共享层)
+└── mcp_servers/           工具服务层 (product/order/refund，FastMCP 异步版)
 scripts/
-├── build_index.py         构建索引
+├── build_index.py         构建 Qdrant + BM25 索引
+├── migrate_sqlite_to_pg.py SQLite 旧数据 → PostgreSQL 迁移（幂等，含 serial 序列重置）【新】
 ├── eval_retrieval.py      检索消融评测 (85题)
 ├── eval_agent.py          端到端规则评测 (11题)
-└── eval_judge.py          LLM-as-Judge 四维评分评测 【新】
-docker-compose.yml / Dockerfile / .github/workflows/ci.yml   部署与 CI 【新】
-docs/UNDERSTANDING.md      改造后架构从零讲解 【新】
-index/                    索引文件 (auto-gen)
+└── eval_judge.py          LLM-as-Judge 四维评分评测
+docker-compose.yml / Dockerfile / .github/workflows/ci.yml   部署与 CI（postgres + qdrant 服务）
+docs/UNDERSTANDING.md      改造后架构从零讲解
+index/                    索引文件 (auto-gen：bm25 + qdrant_storage)
 data/
-├── knowledge.txt          纺织知识库
-├── products.db            产品数据库
-├── orders.db              订单数据库
-└── users/                 用户记忆 (SQLite + ChromaDB)
+├── knowledge.txt          纺织知识库源文件
+├── chunks.json            知识切片（建索引用）
+├── products.db            旧 SQLite 产品库（迁移源，已迁 PG）
+├── orders.db              旧 SQLite 订单库（迁移源，已迁 PG）
+└── users/                 旧用户记忆（迁移源）
 ```

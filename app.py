@@ -302,6 +302,6 @@ if __name__ == "__main__":
     import uvicorn
     print("="*50)
     print("🏭 宏润纺织 AI 客服 Web 版")
-    print("   打开 http://127.0.0.1:8003")
+    print("   打开 http://127.0.0.1:8005")
     print("="*50)
     uvicorn.run(app, host="0.0.0.0", port=8005, log_level="warning")
