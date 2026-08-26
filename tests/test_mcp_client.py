@@ -1,92 +1,59 @@
-"""MCP Client 线程安全测试（P0-2 验收）
+"""MCP 客户端测试（官方 SDK · 异步）
 
-- 并发调用：请求/响应一一对应，不串线
-- 崩溃自愈：子进程被杀后下一次调用自动重启 + 重试成功
+黑盒协议测试：用 stdio_client 真实拉起 FastMCP server 子进程，
+验证 initialize / tools/list / tools/call 全链路（官方 SDK 语义）。
 
-用独立 MCPSyncClient 实例（不碰全局单例），避免影响 app 运行。
+每个测试在自身 async with 内完成连接与调用（同 task，避开
+pytest-asyncio fixture 跨 task 退出 cancel scope 的问题）。
 """
-import subprocess
+import os
 import sys
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from src.mcp_client import MCPSyncClient
-
 PROJECT_ROOT = Path(__file__).parent.parent
-PRODUCT_CMD = [sys.executable, "src/mcp_servers/product_server.py"]
-ORDER_CMD = [sys.executable, "src/mcp_servers/order_server.py"]
-REFUND_CMD = [sys.executable, "src/mcp_servers/refund_server.py"]
-
-KEYWORD_CASES = [
-    ("T400", "T400"),
-    ("尼丝纺", "尼丝纺"),
-    ("牛津布", "牛津布"),
-    ("春亚纺", "春亚纺"),
-]
+SERVER_CMD = [sys.executable, "src/mcp_servers/product_server.py"]
 
 
-def _new_client() -> MCPSyncClient:
-    c = MCPSyncClient()
-    c._commands = {"product": PRODUCT_CMD, "order": ORDER_CMD, "refund": REFUND_CMD}
-    c.connect_server("product", PRODUCT_CMD)
-    c.connect_server("order", ORDER_CMD)
-    c.connect_server("refund", REFUND_CMD)
-    return c
+async def _session_call(query: str = None):
+    """一次完整的 stdio 连接 + 调用（返回 session 内结果）。"""
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+
+    params = StdioServerParameters(
+        command=SERVER_CMD[0], args=SERVER_CMD[1:],
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT)},
+    )
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            if query is None:
+                tools = await session.list_tools()
+                return [t.name for t in tools.tools]
+            return await session.call_tool("search_product", {"query": query})
 
 
-def test_concurrent_calls_no_cross_wiring():
-    """20 线程 × 每线程查不同关键词：结果必须包含自己的关键词（无串线）。"""
-    client = _new_client()
-    try:
-        def worker(i: int) -> tuple:
-            kw, expect = KEYWORD_CASES[i % len(KEYWORD_CASES)]
-            for _ in range(10):
-                result = client.call_tool("search_product", {"query": kw})
-                if expect not in result:
-                    return (i, kw, result[:80])
-            return (i, kw, "OK")
-
-        with ThreadPoolExecutor(max_workers=20) as ex:
-            results = list(ex.map(worker, range(200)))
-
-        bad = [r for r in results if r[2] != "OK"]
-        assert bad == [], f"{len(bad)} 次调用串线: {bad[:3]}"
-    finally:
-        client.shutdown()
+async def test_tools_list_discovery():
+    names = await _session_call()
+    assert "search_product" in names
 
 
-def test_crash_auto_restart_and_retry():
-    """杀掉 product 子进程后，下一次调用应自动重启并成功返回。"""
-    client = _new_client()
-    try:
-        proc = client.servers["product"]
-        proc.terminate()
-        proc.wait(timeout=5)
-        assert proc.poll() is not None  # 确认已死
-
-        # 下一次调用：应检测到死进程 → 重启 → 重试 → 成功
-        result = client.call_tool("search_product", {"query": "T400"})
-        assert "T400" in result, f"重启后调用失败: {result[:80]}"
-        assert client.servers["product"].poll() is None  # 新进程活着
-    finally:
-        client.shutdown()
+async def test_call_tool_roundtrip(pg_db):
+    result = await _session_call("T400")
+    text = "".join(c.text for c in result.content if getattr(c, "type", "") == "text")
+    assert "T400 复合弹力布" in text
 
 
-def test_dead_process_clean_error_not_hang():
-    """进程死掉时调用应在超时内返回错误文案，而不是永久阻塞。"""
-    client = _new_client()
-    try:
-        # 把重启也禁用（模拟重启失败场景），验证不发生永久挂起
-        proc = client.servers["product"]
-        proc.terminate()
-        proc.wait(timeout=5)
-        client._commands["product"] = [sys.executable, "-c", "import sys; sys.exit(3)"]
+async def test_call_tool_validation_error():
+    """FastMCP 内建参数校验：缺必填字段 → isError。"""
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
 
-        import time
-        t0 = time.time()
-        result = client.call_tool("search_product", {"query": "T400"}, timeout=5)
-        elapsed = time.time() - t0
-        assert elapsed < 20, f"调用挂起 {elapsed:.1f}s"
-        assert "不可用" in result or "失败" in result or "重启失败" in result
-    finally:
-        client.shutdown()
+    params = StdioServerParameters(
+        command=SERVER_CMD[0], args=SERVER_CMD[1:],
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT)},
+    )
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool("search_product", {})
+            assert getattr(result, "isError", False) is True

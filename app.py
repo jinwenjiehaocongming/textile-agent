@@ -6,6 +6,7 @@ FastAPI + 原生 HTML，模仿企业微信界面
 运行: python app.py → http://127.0.0.1:8000
 """
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -23,15 +24,24 @@ from src.mcp_client import init_mcp
 from src.stream_chat import stream_chat
 from src.user_identity import resolve_user_id
 
-# ── 初始化 MCP 工具层 ──
-print("🔌 连接 MCP 工具服务器...")
-init_mcp({
+# ── MCP 工具层：lifespan 异步初始化（事件循环内连接，关闭时释放）──
+SERVERS = {
     "product": ["python3", "src/mcp_servers/product_server.py"],
     "order":   ["python3", "src/mcp_servers/order_server.py"],
     "refund":  ["python3", "src/mcp_servers/refund_server.py"],
-})
+}
 
-app = FastAPI(title="宏润纺织 AI 客服")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("🔌 连接 MCP 工具服务器...")
+    await init_mcp(SERVERS)
+    yield
+    from src.mcp_client import get_mcp
+    await get_mcp().shutdown()
+
+
+app = FastAPI(title="宏润纺织 AI 客服", lifespan=lifespan)
 agent_graph = build_graph()
 
 # ── CORS：允许独立前端 (Vite dev server) 跨域访问 ──
@@ -148,7 +158,8 @@ input.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
 
 
 @app.post("/chat")
-def chat(req: ChatRequest, request: Request):
+async def chat(req: ChatRequest, request: Request):
+    import asyncio
     try:
         # 每个请求独立取用户记忆，互不串数据
         user_id = _user_id_from_header(request)
@@ -156,38 +167,37 @@ def chat(req: ChatRequest, request: Request):
         config = thread_config(user_id)
 
         # 挂起态守卫：该用户有订单在待审批 → 不跑图，直接提示
-        snap = agent_graph.get_state(config)
+        snap = await agent_graph.aget_state(config)
         draft = find_pending_draft(getattr(snap, "interrupts", None)) if snap else None
         if draft:
             return {"reply": pending_reply_text(draft), "pending": True, "draft": draft}
 
-        # 加载历史 + 偏好
-        history = memory.load_recent(20)
-        prefs = memory.retrieve_preferences()
+        # 加载历史 + 偏好（异步）
+        history = await memory.load_recent(20)
+        prefs = await memory.retrieve_preferences()
         user_context = "；".join(prefs) if prefs else ""
 
         messages = history + [HumanMessage(content=req.message)]
-        last_type = memory.get_last_query_type()
+        last_type = await memory.get_last_query_type()
 
         state = {"messages": messages, "knowledge_chunks": [], "rewrite_query": "",
                  "query_type": last_type, "user_id": user_id, "user_context": user_context}
-        result = agent_graph.invoke(state, config=config)
+        result = await agent_graph.ainvoke(state, config=config)
 
         # ── HITL：下单挂起，等人工审批 ──
         draft = find_pending_draft(result.get("__interrupt__"))
         if draft:
             reply = pending_reply_text(draft)
-            memory.save_last_query_type("chat")
-            memory.save_messages([HumanMessage(content=req.message), AIMessage(content=reply)])
+            await memory.save_last_query_type("chat")
+            await memory.save_messages([HumanMessage(content=req.message), AIMessage(content=reply)])
             return {"reply": reply, "pending": True, "draft": draft}
 
         # 保存本轮状态供下一轮延续
-        memory.save_last_query_type(result.get("query_type", "chat"))
+        await memory.save_last_query_type(result.get("query_type", "chat"))
 
-        # 存档 + 异步提取（走有界任务队列，不裸开线程）
-        memory.save_messages([HumanMessage(content=req.message), result["messages"][-1]])
-        from src.task_queue import get_extraction_queue
-        get_extraction_queue().submit(memory.extract_and_store, result["messages"], cheap_llm)
+        # 存档 + 异步提取偏好（后台协程）
+        await memory.save_messages([HumanMessage(content=req.message), result["messages"][-1]])
+        asyncio.create_task(memory.extract_and_store(result["messages"], cheap_llm))
 
         return {"reply": result["messages"][-1].content}
     except Exception as e:
@@ -197,10 +207,10 @@ def chat(req: ChatRequest, request: Request):
 
 
 @app.get("/history")
-def get_history(request: Request):
+async def get_history(request: Request):
     user_id = _user_id_from_header(request)
     memory = get_user(user_id)
-    rows = memory.load_recent(30)
+    rows = await memory.load_recent(30)
     return [{"role": m.type, "content": m.content} for m in rows]
 
 
@@ -220,44 +230,39 @@ class ApprovalAction(BaseModel):
     reason: str = ""
 
 
-def _resume_approval(thread_id: str, approved: bool, reason: str = "") -> dict:
-    """恢复挂起的下单图：审批通过 → create_order 写库；拒绝 → 取消。
-
-    thread_id 即 user_id（thread_config 以 user_id 命名会话）。
-    """
+async def _resume_approval(thread_id: str, approved: bool, reason: str = "") -> dict:
+    """恢复挂起的下单图（异步）：审批通过 → create_order 写库；拒绝 → 取消。"""
     if not thread_id or not get_pending(thread_id):
         return {"ok": False, "error": f"没有待审批的订单: {thread_id!r}"}
 
     config = thread_config(thread_id)
-    result = agent_graph.invoke(
+    result = await agent_graph.ainvoke(
         Command(resume={"approved": approved, "reason": reason}), config=config
     )
     remove_pending(thread_id)
 
-    # 审批结果写入该用户记忆，客户下次查看历史/再对话时可见
     final_msgs = (result or {}).get("messages") or []
     ai_text = ""
     for m in reversed(final_msgs):
-        # 下单 Agent 的直接返回是 ToolMessage（工具结果），也要取
         if getattr(m, "content", ""):
             ai_text = m.content
             break
     if ai_text:
-        get_user(thread_id).save_messages([AIMessage(content=ai_text)])
+        await get_user(thread_id).save_messages([AIMessage(content=ai_text)])
 
     return {"ok": True, "approved": approved, "reply": ai_text}
 
 
 @app.post("/approval/approve")
-def approval_approve(body: ApprovalAction):
+async def approval_approve(body: ApprovalAction):
     """审批通过 → 生成订单。"""
-    return _resume_approval(body.thread_id, approved=True, reason=body.reason)
+    return await _resume_approval(body.thread_id, approved=True, reason=body.reason)
 
 
 @app.post("/approval/reject")
-def approval_reject(body: ApprovalAction):
+async def approval_reject(body: ApprovalAction):
     """审批拒绝 → 取消订单。"""
-    return _resume_approval(body.thread_id, approved=False, reason=body.reason)
+    return await _resume_approval(body.thread_id, approved=False, reason=body.reason)
 
 
 @app.get("/healthz")

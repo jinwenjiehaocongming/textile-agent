@@ -71,12 +71,12 @@ def _make_hitl_graph():
     return g.compile(checkpointer=MemorySaver())
 
 
-def test_hitl_invoke_interrupt_then_resume():
+async def test_hitl_invoke_interrupt_then_resume():
     graph = _make_hitl_graph()
     cfg = {"configurable": {"thread_id": "t-hitl"}}
 
     # 首次：invoke 返回 partial state，带 __interrupt__，不抛异常
-    first = graph.invoke({"msgs": []}, cfg)
+    first = await graph.ainvoke({"msgs": []}, cfg)
     draft = find_pending_draft(first.get("__interrupt__"))
     assert draft == {"qty": 100}
 
@@ -86,16 +86,16 @@ def test_hitl_invoke_interrupt_then_resume():
     assert find_pending_draft(snap.interrupts) == {"qty": 100}
 
     # 恢复：Command(resume=...) 走完
-    resume = graph.invoke(Command(resume={"approved": True}), cfg)
+    resume = await graph.ainvoke(Command(resume={"approved": True}), cfg)
     assert resume["msgs"] == ["decided={'approved': True}"]
     assert not graph.get_state(cfg).next  # 已结束
 
 
-def test_hitl_reject_path():
+async def test_hitl_reject_path():
     graph = _make_hitl_graph()
     cfg = {"configurable": {"thread_id": "t-hitl-rej"}}
-    graph.invoke({"msgs": []}, cfg)
-    resume = graph.invoke(Command(resume={"approved": False, "reason": "库存不足"}), cfg)
+    await graph.ainvoke({"msgs": []}, cfg)
+    resume = await graph.ainvoke(Command(resume={"approved": False, "reason": "库存不足"}), cfg)
     assert resume["msgs"] == ["decided={'approved': False, 'reason': '库存不足'}"]
 
 

@@ -1,67 +1,52 @@
-"""用户记忆测试（SQLite 持久化 + 热缓存，不涉及 ChromaDB 偏好）"""
+"""用户记忆测试（异步 · PostgreSQL + 单库多租户）"""
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
-import src.memory as memory
-from src.memory import UserMemory
+from src.memory import get_user
 
 
-@pytest.fixture(autouse=True)
-def _isolate_memory(monkeypatch):
-    """强制用 dict 热缓存（避免依赖本机 Redis），并清空全局缓存"""
-    monkeypatch.setattr(memory, "_use_redis", False)
-    memory._dict_cache.clear()
+@pytest.fixture
+async def user(pg_memory):
+    return get_user("u_test_1")
 
 
-def test_save_and_load(tmp_user_dir):
-    mem = UserMemory("u1")
-    mem.save_messages([HumanMessage(content="你好"), AIMessage(content="您好")])
-    rows = mem.load_recent(10)
-    assert [m.content for m in rows] == ["你好", "您好"]
+async def test_save_and_load(user):
+    await user.save_messages([HumanMessage(content="你好"), AIMessage(content="您好！")])
+    msgs = await user.load_recent(10)
+    assert [m.content for m in msgs] == ["你好", "您好！"]
 
 
-def test_clear_history(tmp_user_dir):
-    mem = UserMemory("u2")
-    mem.save_messages([HumanMessage(content="你好")])
-    mem.clear_history()
-    assert mem.load_recent(10) == []
+async def test_clear_history(user):
+    await user.save_messages([HumanMessage(content="x")])
+    await user.clear_history()
+    assert await user.load_recent(10) == []
 
 
-def test_query_type_persistence(tmp_user_dir):
-    mem = UserMemory("u3")
-    mem.save_last_query_type("place_order")
-    assert mem.get_last_query_type() == "place_order"
+async def test_query_type_persistence(user):
+    assert await user.get_last_query_type() == "chat"
+    await user.save_last_query_type("after_sales")
+    assert await user.get_last_query_type() == "after_sales"
 
 
-def test_load_recent_empty(tmp_user_dir):
-    mem = UserMemory("u4")
-    assert mem.load_recent(10) == []
+async def test_load_recent_empty(user):
+    assert await user.load_recent(10) == []
 
 
-def test_user_isolation(tmp_user_dir):
-    """P0-1 验收：两个 user_id 的历史/状态互不串（Web 层按 X-User-Id 取 get_user）"""
-    from src.memory import get_user
-
-    alice = get_user("alice")
-    bob = get_user("bob")
-    alice.save_messages([HumanMessage(content="alice 的询价"), AIMessage(content="alice 的报价")])
-    alice.save_last_query_type("place_order")
-
-    # bob 看不到 alice 的任何历史/状态
-    assert bob.load_recent(10) == []
-    assert bob.get_last_query_type() == "chat"
-    # alice 自己的数据完好
-    assert [m.content for m in alice.load_recent(10)] == ["alice 的询价", "alice 的报价"]
-    assert alice.get_last_query_type() == "place_order"
+async def test_user_isolation(pg_memory):
+    """多租户行级隔离：不同 user_id 互不可见历史与 profile。"""
+    a = get_user("iso_a")
+    b = get_user("iso_b")
+    await a.save_messages([HumanMessage(content="A的秘密")])
+    await b.save_messages([HumanMessage(content="B的秘密")])
+    assert [m.content for m in await a.load_recent(10)] == ["A的秘密"]
+    assert [m.content for m in await b.load_recent(10)] == ["B的秘密"]
+    await a.save_last_query_type("place_order")
+    assert await b.get_last_query_type() == "chat"
 
 
-def test_invalid_user_id_downgraded(tmp_user_dir, monkeypatch):
-    """防御兜底：恶意 ID 不会拼进文件路径，而是降级为 guest"""
+def test_invalid_user_id_downgraded(monkeypatch):
     import src.memory as memory
-    monkeypatch.setattr(memory, "_use_redis", False)
-    from src.memory import get_user
-
-    evil = get_user("../../etc/passwd")
-    assert evil.user_id == "guest"
-    evil2 = get_user("u_ok-1")
-    assert evil2.user_id == "u_ok-1"
+    from src.user_identity import is_valid_user_id
+    assert is_valid_user_id("ok_user_1")
+    assert not is_valid_user_id("../../etc")
+    assert memory.sanitize_user_id("../../etc") == "guest"

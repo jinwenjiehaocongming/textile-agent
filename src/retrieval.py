@@ -1,41 +1,56 @@
 """
-混合检索器 Hybrid Retrieval
-============================
-向量语义检索 + BM25 关键词检索 → 加权 RRF 融合
+混合检索器 Hybrid Retrieval（异步版）
+====================================
+Qdrant 向量语义检索 + BM25 关键词检索 → 加权 RRF 融合 → CrossEncoder 重排
+
+企业级演进（2026-08）：
+- 向量端：ChromaDB 嵌入式 → Qdrant（src.vector_store；LocalMode 本地 / 独立服务）
+- 类别过滤由 Qdrant payload filter 完成（不再全量拉取建映射）
+- rerank 推理挪到 worker 线程（asyncio.to_thread），不阻塞事件循环
 """
 
-# load_dotenv 必须在 chromadb 之前——.env 里有 HF_HUB_OFFLINE=1
+# load_dotenv 必须在模型 import 之前——.env 里有 HF_HUB_OFFLINE=1
 from dotenv import load_dotenv
 load_dotenv()
 
-import os
-import re
+import asyncio
 import math
+import os
 import pickle
+import re
 from pathlib import Path
-from typing import List, Tuple, Dict, Optional
-import chromadb
-from chromadb.utils import embedding_functions
+from typing import Dict, List, Optional, Tuple
 
-load_dotenv()
+from src import vector_store
+from src.logging_config import get_logger
+
+# 离线模式（有缓存则不联网）
+if Path(os.path.expanduser("~/.cache/huggingface")).exists():
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
+# CrossEncoder 懒加载：模型 ~1GB，首次 rerank 时才加载（import 不阻塞）
+_reranker = None
+
+
+def _get_reranker():
+    global _reranker
+    if _reranker is None:
+        from sentence_transformers import CrossEncoder
+        _reranker = CrossEncoder("BAAI/bge-reranker-base", max_length=512)
+    return _reranker
+
+
+logger = get_logger(__name__)
 
 # ---- 路径 ----
 PROJECT_ROOT = Path(__file__).parent.parent
-CHROMA_PATH = PROJECT_ROOT / "index" / "chroma_db"
 BM25_PATH = PROJECT_ROOT / "index" / "bm25_index.pkl"
+KNOWLEDGE_COLLECTION = vector_store.KNOWLEDGE_COLLECTION
 
-# ---- embedding（本地，免费）----
-# 本地 embedding 模型（免费，无需 API）
-EMBED_MODEL = "BAAI/bge-base-zh-v1.5"  # 102MB，效果≈text-embedding-v4的90%  # 中文 MTEB 榜首，326MB
-
-from langsmith import traceable
-from src.logging_config import get_logger
-from sentence_transformers import CrossEncoder
-rerank_model = CrossEncoder("BAAI/bge-reranker-base", max_length=512)
-logger = get_logger(__name__)
 
 # ============================================================
-# 中文分词（跟 build_index.py 一致）
+# 中文分词（与 build_index.py 一致）
 # ============================================================
 def tokenize(text: str) -> List[str]:
     text = text.lower().strip()
@@ -49,7 +64,7 @@ def tokenize(text: str) -> List[str]:
 
 
 # ============================================================
-# BM25 索引
+# BM25 索引（自研，不依赖向量库）
 # ============================================================
 class BM25Index:
     def __init__(self, k1: float = 1.5, b: float = 0.75):
@@ -127,9 +142,7 @@ def rrf_fusion(
     k: int = 60,
     vec_weight: float = 0.5,
 ) -> List[Tuple[str, int, float]]:
-    """
-    加权 RRF：按文本内容去重，同一文档两路命中则分数累加。
-    """
+    """加权 RRF：按文本内容去重，同一文档两路命中则分数累加。"""
     scores: Dict[str, float] = {}
     bm25_weight = 1.0 - vec_weight
 
@@ -147,35 +160,33 @@ def rrf_fusion(
 # 混合检索器
 # ============================================================
 class HybridRetriever:
-    def __init__(self, chroma_path: Path = CHROMA_PATH, bm25_path: Path = BM25_PATH):
-        # ChromaDB 向量端
-        self.embed_func = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name=EMBED_MODEL,
-        )
-        self.client = chromadb.PersistentClient(path=str(chroma_path))
-        self.collection = self.client.get_collection(
-            "textile_knowledge", embedding_function=self.embed_func
-        )
-
+    def __init__(self, bm25_path: Path = BM25_PATH):
+        # Qdrant 向量端（LocalMode 本地存储 / QDRANT_URL 独立服务）
+        self._text2cat: Dict[str, str] = {}
+        self._cat_loaded = False  # 正文→类别映射懒加载（首次检索时构建）
         # BM25 端
         self.bm25 = BM25Index.load(bm25_path)
-
-        # 建立 text → category 映射（元数据与正文分离后，类别从元数据取，不再正则抠正文）
-        self._text2cat: Dict[str, str] = {}
-        data = self.collection.get(include=["documents", "metadatas"])
-        for doc, meta in zip(data["documents"], data["metadatas"]):
-            self._text2cat[doc] = (meta or {}).get("category", "未知")
-
         self.vec_k = 10
         self.bm25_k = 10
         self.vec_weight = 0.5  # 向量:BM25 = 5:5
 
-    def _category(self, text: str) -> str:
-        """按正文查类别（正文→类别映射）。"""
-        return self._text2cat.get(text, "未知")
+    async def ensure_ready(self) -> None:
+        """显式预热（eval/启动等场景可先调用，避免首次检索时重建映射）。"""
+        await self._ensure_text2cat()
 
-    @traceable(run_type="retriever", name="hybrid_retrieve")
-    def retrieve(
+    async def _ensure_text2cat(self) -> None:
+        """懒构建正文→类别映射（Qdrant scroll，首次检索时执行一次）。"""
+        if self._cat_loaded:
+            return
+        try:
+            await vector_store.ensure_collections()
+            self._text2cat = await _load_text2cat()
+        except Exception as e:  # noqa: BLE001 — 集合未建/服务未起时降级为空映射
+            logger.warning(f"[检索] text2cat 构建失败（降级）: {str(e)[:80]}")
+            self._text2cat = {}
+        self._cat_loaded = True
+
+    async def retrieve(
         self,
         query: str,
         top_k: int = 3,
@@ -184,59 +195,41 @@ class HybridRetriever:
         verbose: bool = False,
     ) -> List[Dict]:
         """
-        混合检索入口。
-
-        参数:
-            query:    用户查询
-            top_k:    返回条数
-            category: 可选，只搜指定类别（面料基础/后整理/场景推荐...）
-            verbose:  打印检索详情
+        混合检索入口（异步）。
 
         返回: [{"text": str, "score": float, "category": str}, ...]
         """
-        # 1. 构建 ChromaDB 查询条件
-        where = {"category": category} if category else None
+        # 0. 懒加载正文→类别映射
+        await self._ensure_text2cat()
+        # 1. 向量检索（Qdrant：embed + query 在 worker 线程）
+        vec_hits = await vector_store.search_knowledge(query, category=category, top_k=self.vec_k)
+        vector_hits = [(h["text"], i, 1.0 - h["score"]) for i, h in enumerate(vec_hits)]
 
-        # 2. 向量检索
-        vec_raw = self.collection.query(
-            query_texts=[query],
-            n_results=self.vec_k,
-            include=["documents", "metadatas", "distances"],
-            where=where,
-        )
-        vector_hits = []
-        for i, (meta, dist) in enumerate(zip(
-            vec_raw["metadatas"][0], vec_raw["distances"][0]
-        )):
-            similarity = 1.0 - (dist / 2.0)
-            vector_hits.append((vec_raw["documents"][0][i], i, similarity))
-
-        # 3. BM25 检索
+        # 2. BM25 检索（本地索引，毫秒级，直跑）
         bm25_raw = self.bm25.search(query, top_k=self.bm25_k)
         bm25_hits = []
         for idx, score in bm25_raw:
             doc = self.bm25.documents[idx]
-            # category 过滤（类别从元数据取）
             if category and self._text2cat.get(doc, "") != category:
                 continue
             bm25_hits.append((doc, idx, score))
 
-        # 4. RRF 融合 — 多拿一些候选，留给 Rerank 筛
+        # 3. RRF 融合 — 多拿候选留给 Rerank 筛
         fetch_k = max(top_k, 10) if use_rerank else top_k
         fused = rrf_fusion(vector_hits, bm25_hits, vec_weight=self.vec_weight)
 
-        # 5. 组装结果
+        # 4. 组装结果
         results = []
         for text, idx, score in fused[:fetch_k]:
             results.append({
                 "text": text,
                 "score": round(score, 4),
-                "category": self._category(text),
+                "category": self._text2cat.get(text, "未知"),
             })
 
-        # 6. LLM Rerank（可选）
+        # 5. Rerank（可选）：模型推理挪到线程，避免阻塞事件循环
         if use_rerank and len(results) > top_k:
-            results = self.rerank(query, results, top_k)
+            results = await asyncio.to_thread(self._rerank_sync, query, results, top_k)
 
         if verbose:
             mode = "hybrid" if bm25_hits else "vector_only"
@@ -245,22 +238,47 @@ class HybridRetriever:
 
         return results
 
-    def rerank(self, query: str, candidates: List[Dict], top_k: int = 3) -> List[Dict]:
-        """Cross-Encoder Rerank：本地模型 batch 推理，毫秒级，免费"""
+    def _rerank_sync(self, query: str, candidates: List[Dict], top_k: int = 3) -> List[Dict]:
+        """CrossEncoder 重排（同步；由调用方 to_thread 包装）。"""
         if len(candidates) <= top_k:
             return candidates
         pairs = [[query, doc["text"][:500]] for doc in candidates]
-        scores = rerank_model.predict(pairs, show_progress_bar=False)
+        scores = _get_reranker().predict(pairs, show_progress_bar=False)
         for doc, score in zip(candidates, scores):
             doc["rerank_score"] = round(float(score), 4)
         candidates.sort(key=lambda x: x["rerank_score"], reverse=True)
         return candidates[:top_k]
 
 
+async def _load_text2cat() -> Dict[str, str]:
+    """正文→类别 映射：从 Qdrant 全量 scroll 构建一次（BM25 过滤与结果标注用）。"""
+    client = vector_store.get_client()
+    mapping: Dict[str, str] = {}
+    try:
+        listed = client.get_collections()
+        if not any(c.name == KNOWLEDGE_COLLECTION for c in listed.collections):
+            return mapping
+    except Exception:
+        return mapping
+    offset = None
+    while True:
+        points, offset = await vector_store._run(
+            client.scroll, collection_name=KNOWLEDGE_COLLECTION,
+            limit=100, with_payload=True, offset=offset,
+        )
+        for p in points:
+            text = (p.payload or {}).get("text")
+            if text:
+                mapping[text] = (p.payload or {}).get("category", "未知")
+        if not offset:
+            break
+    return mapping
+
+
 # ============================================================
 # 快速测试
 # ============================================================
-def main():
+async def main():
     retriever = HybridRetriever()
 
     queries = [
@@ -273,13 +291,11 @@ def main():
     for q in queries:
         print(f"\n{'='*40}")
         print(f"🔍 {q}")
-        results = retriever.retrieve(q, top_k=2, verbose=True)
+        results = await retriever.retrieve(q, top_k=2, verbose=True)
         for i, r in enumerate(results):
             print(f"  #{i+1} [{r['category']}] score={r['score']}")
-            # 只打印第一段
-            first_line = r["text"].strip().split("\n")[0]
-            print(f"     {first_line}")
+            print(f"     {r['text'].strip().splitlines()[0][:60] if r['text'] else ''}")
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

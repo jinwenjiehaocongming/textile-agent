@@ -22,6 +22,7 @@ os.environ.setdefault("TQDM_DISABLE", "1")  # 禁用 CrossEncoder 的进度条
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.retrieval import HybridRetriever, rrf_fusion
+from src import vector_store
 
 # ============================================================
 # 评测集：query → 期望命中的知识类别（独立标注，覆盖 142 块语料）
@@ -134,42 +135,45 @@ EVAL_SET = [
 
 
 def _cat(r: HybridRetriever, text: str) -> str:
-    """从元数据取类别（正文与元数据已分离，不再正则抠正文）"""
+    """从元数据取类别（正文与元数据已分离）"""
     return r._text2cat.get(text, "未知")
 
 
 # ============================================================
-# 四种检索配置
+# 四种检索配置（异步）
 # ============================================================
-def _vector(r: HybridRetriever, query: str, k: int) -> List[str]:
-    raw = r.collection.query(query_texts=[query], n_results=k, include=["documents"])
-    return [_cat(r, d) for d in raw["documents"][0]]
+async def _vector(r: HybridRetriever, query: str, k: int) -> List[str]:
+    hits = await vector_store.search_knowledge(query, top_k=k)
+    return [h["category"] for h in hits]
 
 
-def _bm25(r: HybridRetriever, query: str, k: int) -> List[str]:
+async def _bm25(r: HybridRetriever, query: str, k: int) -> List[str]:
+    await r.ensure_ready()
     hits = r.bm25.search(query, top_k=k)
     return [_cat(r, r.bm25.documents[idx]) for idx, _ in hits]
 
 
-def _hybrid(r: HybridRetriever, query: str, k: int) -> List[str]:
-    vec_raw = r.collection.query(query_texts=[query], n_results=10, include=["documents"])
-    vec_hits = [(d, i, 1.0) for i, d in enumerate(vec_raw["documents"][0])]
+async def _hybrid(r: HybridRetriever, query: str, k: int) -> List[str]:
+    await r.ensure_ready()
+    vec_hits = await vector_store.search_knowledge(query, top_k=10)
+    vec_tuples = [(h["text"], i, 1.0) for i, h in enumerate(vec_hits)]
     bm25_hits = [(r.bm25.documents[idx], idx, score) for idx, score in r.bm25.search(query, top_k=10)]
-    fused = rrf_fusion(vec_hits, bm25_hits)
+    fused = rrf_fusion(vec_tuples, bm25_hits)
     return [_cat(r, text) for text, _, _ in fused[:k]]
 
 
-def _hybrid_rerank(r: HybridRetriever, query: str, k: int) -> List[str]:
-    return [res["category"] for res in r.retrieve(query, top_k=k, use_rerank=True)]
+async def _hybrid_rerank(r: HybridRetriever, query: str, k: int) -> List[str]:
+    res = await r.retrieve(query, top_k=k, use_rerank=True)
+    return [x["category"] for x in res]
 
 
 # ============================================================
 # 指标：Hit@k（Recall@k）+ MRR
 # ============================================================
-def evaluate(search_fn: Callable, retriever: HybridRetriever, k: int = 3) -> dict:
+async def evaluate(search_fn: Callable, retriever: HybridRetriever, k: int = 3) -> dict:
     hits, mrrs = [], []
     for query, expected in EVAL_SET:
-        cats = search_fn(retriever, query, k)
+        cats = await search_fn(retriever, query, k)
         rank = next((i + 1 for i, c in enumerate(cats) if c == expected), None)
         hits.append(1.0 if rank else 0.0)
         mrrs.append(1.0 / rank if rank else 0.0)
@@ -179,9 +183,10 @@ def evaluate(search_fn: Callable, retriever: HybridRetriever, k: int = 3) -> dic
     }
 
 
-def main():
+async def main():
     print("🔍 加载混合检索器（embedding + BM25 + Reranker 本地模型）...")
     retriever = HybridRetriever()
+    await retriever.ensure_ready()
     k = 3
 
     methods = [
@@ -196,7 +201,7 @@ def main():
     print("-" * 36)
     results = {}
     for name, fn in methods:
-        metrics = evaluate(fn, retriever, k)
+        metrics = await evaluate(fn, retriever, k)
         results[name] = metrics
         print(f"{name:<18} {metrics['Hit@%d' % k]:<10.1%} {metrics['MRR']:<8.3f}")
 
@@ -222,4 +227,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())

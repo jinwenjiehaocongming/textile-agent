@@ -1,58 +1,57 @@
 """
-售后 Agent — 退货退款、质量问题投诉
-=====================================
+售后 Agent — 退货退款、质量问题投诉（异步版）
+============================================
 独立 Agent，查订单 + 对照退货规则 + 生成退款工单。
 不碰产品库、不报价。
 """
 
+import os
 import sys
 from pathlib import Path
-from dotenv import load_dotenv
-import os
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+from dotenv import load_dotenv
 load_dotenv()
 from src.logging_config import get_logger
 logger = get_logger(__name__)
 
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (AIMessage, HumanMessage, SystemMessage,
+                                     ToolMessage)
 from src.mcp_client import get_mcp
-from src.llm_utils import _safe_llm
+from src.llm_utils import _safe_llm_async
 from src.render_tools import (
     RENDER_TOOLS, RENDER_TOOL_NAMES, RENDER_PROMPT_HINT,
     attach_render_data, find_render_data_in_msgs,
 )
 
-# 售后 LLM：懒加载（import 不实例化，避免无 .env 环境导入即崩）
 _after_sales_llm = None
 
 
-def __getattr__(name: str):
+def get_after_sales_llm() -> ChatOpenAI:
+    """售后 LLM（懒加载）：节点内显式调用（模块 __getattr__ 在函数体自由引用时不生效）。"""
     global _after_sales_llm
-    if name == "after_sales_llm":
-        if _after_sales_llm is None:
-            _after_sales_llm = ChatOpenAI(
-                api_key=os.getenv("DEEPSEEK_API_KEY"),
-                base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
-                model=os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"),
-                temperature=0,
-                max_retries=2, timeout=30,
-            )
-        return _after_sales_llm
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    if _after_sales_llm is None:
+        _after_sales_llm = ChatOpenAI(
+            api_key=os.getenv("DEEPSEEK_API_KEY"),
+            base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
+            model=os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"),
+            temperature=0,
+            max_retries=2, timeout=30,
+        )
+    return _after_sales_llm
 
-# ============================================================
-# 工具已移至 MCP Server
-#   refund_server.py → query_order, create_refund
-# ============================================================
+
+def __getattr__(name: str):
+    if name == "after_sales_llm":
+        return get_after_sales_llm()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # ============================================================
 # Supervisor 判断：是否该走售后
 # ============================================================
 def should_after_sales(messages: list) -> bool:
-    """检查对话最后一条客户消息是否有售后意图"""
     last = messages[-1].content if messages else ""
     keywords = ["退货", "退款", "质量问题", "色差", "破洞", "纬斜", "缩水",
                 "投诉", "换货", "退钱", "赔", "不满意", "发货了吗", "催发货",
@@ -61,7 +60,7 @@ def should_after_sales(messages: list) -> bool:
 
 
 # ============================================================
-# 售后 Agent
+# 售后 Agent（异步）
 # ============================================================
 AFTER_SALES_PROMPT = """你是纺织厂的售后服务专员。处理客户的退货、退款、质量投诉。
 
@@ -103,16 +102,14 @@ AFTER_SALES_PROMPT = """你是纺织厂的售后服务专员。处理客户的�
 请处理客户的售后需求。"""
 
 
-def after_sales_node(messages: list) -> AIMessage:
-    """售后 Agent 的对话节点。工具通过 MCP Client 自动发现。"""
+async def after_sales_node(messages: list) -> AIMessage:
+    """售后 Agent 的对话节点（异步）。工具通过 MCP Client 自动发现。"""
     mcp = get_mcp()
 
-    # 售后只绑查订单 + 创建退款 + 展示工具
-    llm_with_tools = after_sales_llm.bind_tools(
+    llm_with_tools = get_after_sales_llm().bind_tools(
         mcp.get_tools_for_langchain(["query_order", "create_refund"]) + RENDER_TOOLS
     )
 
-    # 对话历史作为真正的 message 列表传入（不再拼进 system prompt）
     history_msgs = [
         HumanMessage(content=m.content) if m.type == "human" else AIMessage(content=m.content)
         for m in messages[-10:]
@@ -126,20 +123,21 @@ def after_sales_node(messages: list) -> AIMessage:
     ]
 
     for _ in range(5):
-        response = _safe_llm(llm_with_tools, conversation,
-                             fallback=AIMessage(content="系统繁忙，请稍后重试。您的售后需求已记录，客服会尽快联系您。"),
-                             stream_tokens=True)  # 真流式：回复 token 逐字推给 SSE
+        response = await _safe_llm_async(
+            llm_with_tools, conversation,
+            fallback=AIMessage(content="系统繁忙，请稍后重试。您的售后需求已记录，客服会尽快联系您。"),
+            stream_tokens=True,
+        )
         conversation.append(response)
 
         if hasattr(response, "tool_calls") and response.tool_calls:
             tool_msgs = []
             for tc in response.tool_calls:
                 name, args = tc["name"], tc["args"]
-                # 展示工具是数据透传协议，不执行
                 if name in RENDER_TOOL_NAMES:
                     tool_msgs.append(ToolMessage(content="", tool_call_id=tc["id"]))
                     continue
-                result = mcp.call_tool(name, args)
+                result = await mcp.call_tool(name, args)
                 logger.info(f"[售后] {name}({args})")
                 tool_msgs.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
             conversation.extend(tool_msgs)

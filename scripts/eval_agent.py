@@ -26,7 +26,7 @@ from src.mcp_client import init_mcp, get_mcp
 # ============================================================
 # 测试用例：共享用例集 src/eval_cases.py（售前/下单/售后/闲聊/安全）
 # ============================================================
-def run_case(graph, case: dict, user_id: str) -> tuple:
+async def run_case(graph, case: dict, user_id: str) -> tuple:
     state = {
         "messages": case["messages"],
         "knowledge_chunks": [],
@@ -36,20 +36,20 @@ def run_case(graph, case: dict, user_id: str) -> tuple:
         "user_context": "",
     }
     cfg = thread_config(user_id)
-    result = graph.invoke(state, config=cfg)
+    result = await graph.ainvoke(state, config=cfg)
     if "__interrupt__" in result:
         # HITL：下单会先挂起等人工审批。评测假设审批人放行，自动通过后
         # 再取最终回复（订单号只有审批通过后才生成）。
         from langgraph.types import Command
-        result = graph.invoke(Command(resume={"approved": True}), config=cfg)
+        result = await graph.ainvoke(Command(resume={"approved": True}), config=cfg)
     reply = result["messages"][-1].content or ""
     passed = case["check"](reply)
     return passed, reply
 
 
-def main():
+async def main():
     print("🔌 连接 MCP + 构建 graph...")
-    init_mcp({
+    await init_mcp({
         "product": ["python3", "src/mcp_servers/product_server.py"],
         "order":   ["python3", "src/mcp_servers/order_server.py"],
         "refund":  ["python3", "src/mcp_servers/refund_server.py"],
@@ -64,7 +64,7 @@ def main():
     print("-" * 70)
     for case in CASES:
         try:
-            ok, reply = run_case(graph, case, user_id="eval_user")
+            ok, reply = await run_case(graph, case, user_id="eval_user")
         except Exception as e:
             ok, reply = False, f"异常: {str(e)[:80]}"
         passed += int(ok)
@@ -83,8 +83,9 @@ def main():
     (out / "eval_agent.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"📄 报告已写入 eval_results/eval_agent.json")
-    mcp.shutdown()
+    await mcp.shutdown()
 
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())
