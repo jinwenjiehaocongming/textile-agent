@@ -16,9 +16,9 @@
 - **双层审核** — 规则快速拦截 + LLM 安全审查
 - **三层记忆** — Redis 热缓存（可选）+ PostgreSQL 对话存档（user_id 行级隔离）+ Qdrant 长期偏好
 - **多用户隔离** — `X-User-Id` 请求头按用户隔离历史/偏好/订单（`src/user_identity.py` 单一校验源）
-- **官方 MCP SDK** — 自研客户端演进迁移官方 `mcp` SDK（ClientSession + stdio_client 异步），三个 Server 用 FastMCP 重写
+- **官方 MCP SDK** — 三个工具 Server 用 FastMCP 重写，客户端用官方 `mcp` SDK（ClientSession + stdio_client 异步）管理子进程生命周期
 - **全链路异步** — LangGraph `ainvoke`、节点 async、LLM `astream` 单事件循环（企业级演进）
-- **评估体系** — 检索消融评测 85 题 + 端到端规则评测 11 题 + LLM-as-Judge 四维评分 (11/11)
+- **评估体系** — 检索消融评测 85 题 + 端到端规则评测 25 题（五类场景：售前/下单/售后/闲聊/安全）+ LLM-as-Judge 四维评分 (25/25)
 
 ## 快速开始
 
@@ -67,8 +67,8 @@ Rerank: BAAI/bge-reranker-base (本地 CrossEncoder)
 |------|:--:|
 | 检索 Hit@3 | 100% |
 | 检索 MRR（混合+Rerank，Qdrant 版） | 0.959 |
-| 端到端通过率（规则断言） | 100% (11/11) |
-| LLM-as-Judge 通过率 | 100% (11/11) |
+| 端到端通过率（规则断言） | 100% (25/25) |
+| LLM-as-Judge 通过率 | 100% (25/25) |
 | Judge 维度均分 | relevance 5.0 / completeness 4.55 / factual 5.0 / safety 5.0 / overall 4.82 |
 
 详见 [EVALUATION.md](EVALUATION.md)
@@ -135,7 +135,7 @@ scripts/
 ├── build_index.py         构建 Qdrant + BM25 索引
 ├── migrate_sqlite_to_pg.py SQLite 旧数据 → PostgreSQL 迁移（幂等，含 serial 序列重置）【新】
 ├── eval_retrieval.py      检索消融评测 (85题)
-├── eval_agent.py          端到端规则评测 (11题)
+├── eval_agent.py          端到端规则评测 (25题)
 └── eval_judge.py          LLM-as-Judge 四维评分评测
 docker-compose.yml / Dockerfile / .github/workflows/ci.yml   部署与 CI（postgres + qdrant 服务）
 docs/UNDERSTANDING.md      改造后架构从零讲解
