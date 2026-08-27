@@ -1,10 +1,31 @@
-# 纺织 B2B 智能客服 Agent
+# 纺织 B2B 交易智能体 Agent
 
-基于 LangGraph 的多 Agent 纺织企业客服系统，支持产品查询、面料知识问答、下单、售后全流程。
+> 客户说「羽绒服用什么面料」「T400 黑色多少钱」「我要退货」→ 系统自动路由到售前 / 下单 / 售后 Agent，
+> 跑通 **询价 → 知识问答 → 下单（人工审批）→ 查单 → 退款** 的交易闭环。
+> 不是"回答问题"的客服，是"完成业务"的 Agent。
 
-> 📖 改造后架构从零讲解见 [docs/UNDERSTANDING.md](docs/UNDERSTANDING.md)；生产化改造明细见 [PRODUCTION_MIGRATION_CHECKLIST.md](PRODUCTION_MIGRATION_CHECKLIST.md)。
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![LangGraph](https://img.shields.io/badge/LangGraph-0.6-1C3C3C?logo=langchain&logoColor=white)
+![Qdrant](https://img.shields.io/badge/Qdrant-1.19-1C3C3C?logo=qdrant&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.128-009688?logo=fastapi&logoColor=white)
+![MCP](https://img.shields.io/badge/MCP-官方SDK-4B32C3)
+![License](https://img.shields.io/badge/License-MIT-yellow)
 
-## 特性
+> 📖 架构从零讲解见 [docs/UNDERSTANDING.md](docs/UNDERSTANDING.md)；生产化改造明细见 [PRODUCTION_MIGRATION_CHECKLIST.md](PRODUCTION_MIGRATION_CHECKLIST.md)。
+
+---
+
+## 🖥️ 界面展示
+
+<p align="center">
+  <img src="docs/assets/screenshots/chat-inquiry.png" width="48%" alt="售前知识问答">
+  <img src="docs/assets/screenshots/chat-order.png" width="48%" alt="下单（人工审批）">
+</p>
+
+---
+
+## ✨ 功能亮点
 
 - **多 Agent 架构** — Supervisor 三分支路由（售前 / 下单 / 售后），状态机 + LLM 意图分类
 - **混合检索 RAG** — Qdrant 向量 + BM25 关键词 + RRF 融合 + CrossEncoder Rerank（企业级演进：ChromaDB → Qdrant，LocalMode/独立服务一份代码）
@@ -49,17 +70,27 @@ python app.py
 
 ## 架构
 
-```
-入口 → 改写查询 → 知识检索 → Supervisor → 售前 Agent → 审核 → END
-                                          → 下单 Agent ─⛔ interrupt 挂起──→ 人工审批 → create_order → 审核 → END
-                                          → 售后 Agent → 审核 → END
+```mermaid
+flowchart LR
+    U[👤 客户消息] --> R[改写查询]
+    R --> K[🔍 知识检索<br/>Qdrant + BM25 + RRF + Rerank]
+    K --> S{{Supervisor 意图路由}}
+    S -->|售前| A1[售前 Agent<br/>询价 · 知识问答 · 库存]
+    S -->|下单| A2[下单 Agent<br/>查产品 · 确认单]
+    S -->|售后| A3[售后 Agent<br/>查单 · 退货 · 退款]
+    A2 -->|interrupt 挂起| H{👨‍💼 销售经理审批}
+    H -->|approve| O[(PostgreSQL<br/>写入订单)]
+    H -->|reject| U2[回复客户]
+    A1 --> V[双层审核]
+    A3 --> V
+    O --> V
+    V --> W[😀 最终回复<br/>SSE 流式]
 
-数据库: PostgreSQL（study1 库：products 281条 / orders / refunds / conversations / profile）
-知识库: Qdrant 集合 textile_knowledge（142 条结构化 chunk）+ BM25 索引
-Embedding: BAAI/bge-base-zh-v1.5 (本地, 免费)
-Rerank: BAAI/bge-reranker-base (本地 CrossEncoder)
-执行过程: 每个节点经 SSE 实时推给前端（节点事件流式）
+    style H fill:#fff3cd,stroke:#f0ad4e
+    style O fill:#e7f3ff,stroke:#4a90d9
 ```
+
+**存储**：业务数据 → PostgreSQL（products 281 条 / orders / refunds / conversations / profile）；知识 → Qdrant 集合 `textile_knowledge`（142 条）+ BM25 索引；Embedding/Rerank → BAAI bge 本地模型。图执行过程经 SSE 实时推给前端（节点事件流式）。
 
 ## 评估
 
