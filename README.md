@@ -18,9 +18,14 @@
 
 ## 🖥️ 界面展示
 
+**完整下单路线**：客户询价 → 生成确认单 → HITL 挂起待审批 → 审批通过生成订单
+
+<p align="center">
+  <img src="docs/assets/screenshots/order-flow-full.png" width="92%" alt="完整下单路线（报价→确认单→审批→订单号）">
+</p>
+
 <p align="center">
   <img src="docs/assets/screenshots/chat-inquiry.png" width="48%" alt="售前知识问答">
-  <img src="docs/assets/screenshots/chat-order.png" width="48%" alt="下单（人工审批）">
 </p>
 
 ---
