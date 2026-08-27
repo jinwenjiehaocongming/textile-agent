@@ -24,10 +24,6 @@
   <img src="docs/assets/screenshots/order-flow-full.png" width="92%" alt="完整下单路线（报价→确认单→审批→订单号）">
 </p>
 
-<p align="center">
-  <img src="docs/assets/screenshots/chat-inquiry.png" width="48%" alt="售前知识问答">
-</p>
-
 ---
 
 ## ✨ 功能亮点
