@@ -47,7 +47,7 @@ LLM 裁判对回答打 4 维分（相关性/完整性/事实一致性/安全合�
   「以上为……现货」过度依赖表格，纯文本场景下答非所问。
 - 据此改进 prompt：① 知识/推荐类问题先用检索知识给出结论，不急着调工具报价；
   ② 正文不得依赖表格，必须自带完整信息。
-- 复测 25/25，relevance 5.0 / overall 4.82。
+- 复测 11/11，relevance 5.0 / overall 4.82。
 
 > 运行: `python scripts/eval_judge.py`
 > 报告: `eval_results/eval_judge.json`

@@ -40,7 +40,7 @@
 - **多用户隔离** — `X-User-Id` 请求头按用户隔离历史/偏好/订单（`src/user_identity.py` 单一校验源）
 - **官方 MCP SDK** — 三个工具 Server 用 FastMCP 重写，客户端用官方 `mcp` SDK（ClientSession + stdio_client 异步）管理子进程生命周期
 - **全链路异步** — LangGraph `ainvoke`、节点 async、LLM `astream` 单事件循环（企业级演进）
-- **评估体系** — 检索消融评测 85 题 + 端到端规则评测 25 题（五类场景：售前/下单/售后/闲聊/安全）+ LLM-as-Judge 四维评分 (25/25)
+- **评估体系** — 检索消融评测 85 题 + 端到端规则评测 25 题（五类场景：售前/下单/售后/闲聊/安全）+ LLM-as-Judge 四维评分 (11/11)
 
 ## 快速开始
 
@@ -68,6 +68,10 @@ python app.py
 ```
 
 > 多用户：Web 请求带请求头 `X-User-Id`（前端自动处理）；非法值返回 400，缺省降级 `guest`。
+
+> 鉴权（2026-08）：管理端点（`/approval/*`）已加 JWT 鉴权（无 token 401 / 非管理员 403），审批动作写 `audit_log` 审计表。
+> `GET /me` 返回当前身份（前端据此显隐审批入口）；`POST /dev/login`（仅 `DEV_MODE=1` 注册）支持切换客户/管理员身份（mock 微信身份）。
+> 生产接入企业微信 OAuth 后，`X-User-Id` 回退与 `/dev/login` 一并移除。
 
 ## 架构
 
@@ -100,7 +104,7 @@ flowchart LR
 | 检索 Hit@3 | 100% |
 | 检索 MRR（混合+Rerank，Qdrant 版） | 0.959 |
 | 端到端通过率（规则断言） | 100% (25/25) |
-| LLM-as-Judge 通过率 | 100% (25/25) |
+| LLM-as-Judge 通过率 | 100% (11/11) |
 | Judge 维度均分 | relevance 5.0 / completeness 4.55 / factual 5.0 / safety 5.0 / overall 4.82 |
 
 详见 [EVALUATION.md](EVALUATION.md)
