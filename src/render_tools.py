@@ -94,8 +94,12 @@ RENDER_TOOLS = [
         "function": {
             "name": "render_order",
             "description": (
-                "【表格展示】当需要向客户展示一笔订单的信息（查订单状态/下单成功后的确认单）时调用。"
+                "【表格展示】当需要向客户展示一笔订单的信息时调用（仅限两种情况："
+                "① 通过 query_order_status 工具查询到的真实订单；"
+                "② 下单流程中 create_order 真实生成订单后的结果展示）。"
                 "参数传订单对象（order_no/product_name/color/quantity/unit_price/total/status 等）。"
+                "⚠️ 严禁编造订单号或订单状态：没有真实查询/生成结果时，绝不能调用本工具，"
+                "应如实告知客户未查到订单。"
             ),
             "parameters": {
                 "type": "object",
@@ -139,6 +143,13 @@ RENDER_PROMPT_HINT = """\
 - 订单信息（查订单状态、下单后的确认单）→ 调用 render_order，参数传订单对象
 - 退款单信息 → 调用 render_refund，参数传退款单对象
 查询不到数据、或纯闲聊/知识问答时，不需要调用这些工具。
+
+## 展示工具真实性红线（违反即事故）
+- render_order / render_refund **只能展示工具调用（query_order_status 等）返回的真实数据**。
+- 严禁编造订单号、订单状态、金额、电话、地址——没有真实查询结果就如实说"未查到该订单"，
+  绝不能自己造一张"订单卡片"给客户看。
+- 订单号格式必须是 query_order_status 返回的真实值（如 ORD-20260822-165808931234）；
+  你自行拼出的 ORD-xxxx 一律是编造。
 
 ## 重要：正文不能依赖表格
 调用展示工具后，正文仍必须用文字给出**可独立理解的关键结论**：

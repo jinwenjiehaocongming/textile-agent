@@ -31,3 +31,6 @@ scripts/serper_search.py
 # 个人学习笔记（不上传）
 MCP_MIGRATION_GUIDE.md
 .pytest_cache/
+
+# 个人面试准备笔记（不公开）
+面试/

@@ -7,7 +7,10 @@ FastAPI + 原生 HTML，模仿企业微信界面
 """
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Request
+import os
+from datetime import datetime
+
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -19,10 +22,15 @@ from src.agent import build_graph, cheap_llm, thread_config
 from src.approval import (
     find_pending_draft, get_pending, list_pending, pending_reply_text, remove_pending,
 )
+from src.auth import create_token, require_admin, AuthError
+from src.db import execute
 from src.memory import get_user
 from src.mcp_client import init_mcp
 from src.stream_chat import stream_chat
-from src.user_identity import resolve_user_id
+from src.user_identity import is_valid_user_id, resolve_user_id
+
+# ── 鉴权开关：DEV_MODE=1 时注册 /dev/login（mock 微信身份，开发/演示用）──
+DEV_MODE = os.getenv("DEV_MODE") == "1"
 
 # ── MCP 工具层：lifespan 异步初始化（事件循环内连接，关闭时释放）──
 SERVERS = {
@@ -64,6 +72,26 @@ def _user_id_from_header(request: Request) -> str:
         raise HTTPException(status_code=400, detail=str(e))
 
 
+def _resolve_identity(request: Request) -> dict:
+    """客户面身份解析（鉴权过渡期策略）：
+    - 有 Authorization: Bearer <JWT> → 验签解析，返回真实身份（微信/登录签发）
+    - 无 token → 回退 X-User-Id（开发过渡；生产接入 OAuth 后移除该回退，强制 token）
+    """
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        try:
+            return _decode_token(auth_header[7:].strip())
+        except AuthError as e:
+            raise HTTPException(status_code=e.status, detail=e.detail)
+    uid = _user_id_from_header(request)
+    return {"user_id": uid, "role": "guest"}
+
+
+def _decode_token(token: str) -> dict:
+    from src.auth import decode_token
+    return decode_token(token)
+
+
 class ChatRequest(BaseModel):
     message: str
 
@@ -72,8 +100,8 @@ class ChatRequest(BaseModel):
 async def chat(req: ChatRequest, request: Request):
     import asyncio
     try:
-        # 每个请求独立取用户记忆，互不串数据
-        user_id = _user_id_from_header(request)
+        # 每个请求独立取用户记忆，互不串数据（身份：JWT 优先，无 token 回退 X-User-Id）
+        user_id = _resolve_identity(request)["user_id"]
         memory = get_user(user_id)
         config = thread_config(user_id)
 
@@ -119,20 +147,66 @@ async def chat(req: ChatRequest, request: Request):
 
 @app.get("/history")
 async def get_history(request: Request):
-    user_id = _user_id_from_header(request)
+    user_id = _resolve_identity(request)["user_id"]
     memory = get_user(user_id)
     rows = await memory.load_recent(30)
     return [{"role": m.type, "content": m.content} for m in rows]
 
 
 # ════════════════════════════════════════════════════════════
-# HITL：订单人工审批管理端点（销售经理使用）
-# ⚠️ P3 前未加鉴权，生产必须接管理员登录/角色校验
+# 鉴权：身份探测 + 开发模式 mock 登录
+# ── /me：前端启动时探测当前身份（role 决定审批入口显隐）
+# ── /dev/login：仅 DEV_MODE=1 注册；mock 微信身份，返回与 OAuth 回调一致的 {token, role}
 # ════════════════════════════════════════════════════════════
 
+@app.get("/me")
+async def me(request: Request):
+    """返回当前身份 {user_id, role}。无/无效 token → guest（前端据此隐藏审批入口）。"""
+    try:
+        return _resolve_identity(request)
+    except HTTPException:
+        return {"user_id": "guest", "role": "guest"}
+
+
+if DEV_MODE:
+    class DevLoginBody(BaseModel):
+        role: str = "customer"   # customer | admin
+        user_id: str = ""        # 可选，默认 dev_customer / dev_admin
+
+    @app.post("/dev/login")
+    async def dev_login(body: DevLoginBody):
+        """开发/演示用 mock 登录：签发任意角色的 JWT（生产由微信 OAuth 取代）。"""
+        role = body.role if body.role in ("customer", "admin") else "customer"
+        uid = (body.user_id or "").strip() or ("dev_admin" if role == "admin" else "dev_customer")
+        if not is_valid_user_id(uid):
+            raise HTTPException(status_code=400, detail="非法 user_id")
+        token = create_token(uid, role=role)
+        return {"token": token, "user_id": uid, "role": role}
+
+
+# ════════════════════════════════════════════════════════════
+# HITL：订单人工审批管理端点（销售经理使用）
+# ✅ 鉴权：require_admin —— 无 token 401 / 非 admin 403；审批动作写 audit_log
+# ════════════════════════════════════════════════════════════
+
+async def _audit(actor: str, action: str, thread_id: str = "", detail: str = "") -> None:
+    """审计留痕：谁、何时、做了什么（鉴权审计 + 合规审计一次做掉）。"""
+    try:
+        await execute(
+            "INSERT INTO audit_log (actor, action, thread_id, detail, created_at) "
+            "VALUES (:actor, :action, :thread_id, :detail, :ts)",
+            {"actor": actor, "action": action, "thread_id": thread_id,
+             "detail": detail, "ts": datetime.now().isoformat()},
+        )
+    except Exception as e:  # noqa: BLE001 审计失败不影响主流程
+        import traceback
+        traceback.print_exc()
+        print(f"[audit] 写入失败: {e}")
+
+
 @app.get("/approval/pending")
-def approval_pending():
-    """列出全部待审批订单。"""
+def approval_pending(admin: dict = Depends(require_admin)):
+    """列出全部待审批订单（仅管理员）。"""
     return {"pending": list_pending()}
 
 
@@ -141,7 +215,7 @@ class ApprovalAction(BaseModel):
     reason: str = ""
 
 
-async def _resume_approval(thread_id: str, approved: bool, reason: str = "") -> dict:
+async def _resume_approval(thread_id: str, approved: bool, reason: str = "", actor: str = "") -> dict:
     """恢复挂起的下单图（异步）：审批通过 → create_order 写库；拒绝 → 取消。"""
     if not thread_id or not get_pending(thread_id):
         return {"ok": False, "error": f"没有待审批的订单: {thread_id!r}"}
@@ -161,19 +235,24 @@ async def _resume_approval(thread_id: str, approved: bool, reason: str = "") -> 
     if ai_text:
         await get_user(thread_id).save_messages([AIMessage(content=ai_text)])
 
+    # 审计：谁批的、批了什么、理由
+    await _audit(actor, "approve" if approved else "reject", thread_id, reason)
+
     return {"ok": True, "approved": approved, "reply": ai_text}
 
 
 @app.post("/approval/approve")
-async def approval_approve(body: ApprovalAction):
-    """审批通过 → 生成订单。"""
-    return await _resume_approval(body.thread_id, approved=True, reason=body.reason)
+async def approval_approve(body: ApprovalAction, admin: dict = Depends(require_admin)):
+    """审批通过 → 生成订单（仅管理员）。"""
+    return await _resume_approval(body.thread_id, approved=True,
+                                  reason=body.reason, actor=admin["user_id"])
 
 
 @app.post("/approval/reject")
-async def approval_reject(body: ApprovalAction):
-    """审批拒绝 → 取消订单。"""
-    return await _resume_approval(body.thread_id, approved=False, reason=body.reason)
+async def approval_reject(body: ApprovalAction, admin: dict = Depends(require_admin)):
+    """审批拒绝 → 取消订单（仅管理员）。"""
+    return await _resume_approval(body.thread_id, approved=False,
+                                  reason=body.reason, actor=admin["user_id"])
 
 
 @app.get("/healthz")
@@ -189,7 +268,7 @@ def healthz():
 # ── SSE 流式聊天端点（供 React 前端使用）──
 @app.post("/chat/stream")
 async def chat_stream(req: ChatRequest, request: Request):
-    user_id = _user_id_from_header(request)
+    user_id = _resolve_identity(request)["user_id"]
     memory = get_user(user_id)
 
     async def event_gen():
@@ -217,11 +296,14 @@ from fastapi import APIRouter
 _api = APIRouter(prefix="/api")
 _api.post("/chat")(chat)
 _api.get("/history")(get_history)
+_api.get("/me")(me)
 _api.get("/approval/pending")(approval_pending)
 _api.post("/approval/approve")(approval_approve)
 _api.post("/approval/reject")(approval_reject)
 _api.get("/healthz")(healthz)
 _api.post("/chat/stream")(chat_stream)
+if DEV_MODE:
+    _api.post("/dev/login")(dev_login)
 app.include_router(_api)
 
 

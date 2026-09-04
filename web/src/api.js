@@ -10,6 +10,7 @@ const BASE = import.meta.env.VITE_API_BASE || '/api'
  * 后端按请求头 X-User-Id 隔离历史/偏好/订单，互不串数据。
  */
 const USER_ID_KEY = 'hongrun_user_id'
+const TOKEN_KEY = 'hongrun_token'
 
 export function getUserId() {
   let uid = localStorage.getItem(USER_ID_KEY)
@@ -20,8 +21,61 @@ export function getUserId() {
   return uid
 }
 
+// ── JWT 鉴权（2026-08）──────────────────────────────────────
+// token 优先于 X-User-Id：有 token 后端认 token 里的身份，X-User-Id 仅作开发兜底
+export function getToken() {
+  return localStorage.getItem(TOKEN_KEY) || ''
+}
+
+export function setToken(token) {
+  if (token) localStorage.setItem(TOKEN_KEY, token)
+  else localStorage.removeItem(TOKEN_KEY)
+}
+
 function authHeaders(extra = {}) {
-  return { 'X-User-Id': getUserId(), ...extra }
+  const headers = { 'X-User-Id': getUserId(), ...extra }
+  const token = getToken()
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  return headers
+}
+
+/** 开发/演示登录（后端 /dev/login，生产由微信 OAuth 取代）。切换身份即换 token。 */
+export async function login({ role = 'customer', user_id = '' } = {}) {
+  const resp = await fetch(`${BASE}/dev/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-User-Id': getUserId() },
+    body: JSON.stringify({ role, user_id }),
+  })
+  if (!resp.ok) throw new Error(`登录失败 (${resp.status})`)
+  const body = await resp.json()
+  setToken(body.token)
+  return body // { token, user_id, role }
+}
+
+/** 探测当前身份（前端据此显隐审批入口；授权仍以服务端为准） */
+export async function fetchMe() {
+  const resp = await fetch(`${BASE}/me`, { headers: authHeaders() })
+  if (!resp.ok) return { user_id: 'guest', role: 'guest' }
+  return resp.json()
+}
+
+/** 待审批订单列表（仅管理员，403 时抛错） */
+export async function fetchPending() {
+  const resp = await fetch(`${BASE}/approval/pending`, { headers: authHeaders() })
+  if (!resp.ok) throw new Error(`加载待审批失败 (${resp.status})`)
+  const body = await resp.json()
+  return body.pending || []
+}
+
+/** 审批：通过 / 拒绝（仅管理员） */
+export async function decideApproval(action, threadId, reason = '') {
+  const resp = await fetch(`${BASE}/approval/${action}`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ thread_id: threadId, reason }),
+  })
+  if (!resp.ok) throw new Error(`审批失败 (${resp.status})`)
+  return resp.json()
 }
 
 /**

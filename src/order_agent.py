@@ -108,6 +108,8 @@ ORDER_AGENT_PROMPT = """你是下单助手。根据对话历史处理订单。
   总价：¥xxx | 电话：xxx | 地址：xxx | 交期：xxx
   请确认以上信息是否正确？回复"确认"即可下单。
   ```
+- **确认单必须以上面格式原样结尾**（最后一行固定为：
+  「请确认以上信息是否正确？回复"确认"即可下单。」）——路由靠这句话识别你正在等客户确认。
 - 展示确认单时**不要调 create_order**，等客户回复
 
 ### 第三步：客户确认后下单
@@ -170,6 +172,12 @@ async def order_agent_node(messages: list, customer_id: str = "guest") -> AIMess
     """
     下单 Agent（异步）：先查产品确认，再下单。
     工具通过 MCP Client 自动发现。
+
+    完成信号（order_completed）：
+    - 只有 create_order 工具**真实执行成功**（返回含「✅ 订单已生成」）才置 True，
+      随返回消息挂到 additional_kwargs，供 agent.order_agent_node 决定 query_type。
+    - 修复（2026-09）：绝不能从 LLM 回复文本里找订单号判断完成——回复可能复述
+      历史中的订单（含真实格式），会导致 query_type 被误重置为 chat（下单挂半路）。
     """
     mcp = get_mcp()
 
@@ -189,6 +197,16 @@ async def order_agent_node(messages: list, customer_id: str = "guest") -> AIMess
         *history_msgs,
         HumanMessage(content="处理：刚才发过确认单 + 客户说确认 → 直接create_order。信息不齐 → 先查先问。"),
     ]
+
+    order_completed = False  # 本轮是否真实生成订单（以工具结果为准）
+
+    def _attach_completed(msg):
+        if not order_completed:
+            return msg
+        kw = dict(getattr(msg, "additional_kwargs", None) or {})
+        kw["order_completed"] = True
+        msg.additional_kwargs = kw
+        return msg
 
     # 最多 5 轮 ReAct（查产品 → 下单）
     for _ in range(5):
@@ -210,6 +228,9 @@ async def order_agent_node(messages: list, customer_id: str = "guest") -> AIMess
                 if name == "create_order":
                     # HITL：人工审批拦截（interrupt 挂起，审批通过才写库）
                     result = await _approve_then_create(args, customer_id)
+                    # 完成信号：工具真实返回成功（LLM 文本不可信，历史订单号会误伤）
+                    if "✅ 订单已生成" in str(result):
+                        order_completed = True
                     tool_msgs.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
                     continue
                 result = await mcp.call_tool(name, args)
@@ -220,7 +241,7 @@ async def order_agent_node(messages: list, customer_id: str = "guest") -> AIMess
             if any(tc["name"] == "create_order" for tc in response.tool_calls):
                 tool_msg = tool_msgs[-1]
                 render_data = find_render_data_in_msgs(conversation)
-                return attach_render_data(tool_msg, render_data)
+                return _attach_completed(attach_render_data(tool_msg, render_data))
         else:
             # 没有工具调用 → 最终回复；检测编造的订单号，强制重试
             content = response.content or ""
@@ -229,6 +250,6 @@ async def order_agent_node(messages: list, customer_id: str = "guest") -> AIMess
                 conversation.append(HumanMessage(content="你刚才编了一个订单号。这是不允许的。你必须调用 create_order 工具来生成真实订单。请现在调用 create_order。"))
                 continue
             render_data = find_render_data_in_msgs(conversation)
-            return attach_render_data(response, render_data)
+            return _attach_completed(attach_render_data(response, render_data))
 
-    return AIMessage(content="下单流程超时，请稍后重试。")
+    return _attach_completed(AIMessage(content="下单流程超时，请稍后重试。"))

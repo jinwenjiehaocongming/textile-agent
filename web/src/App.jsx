@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { streamChat, fetchHistory } from './api'
+import { streamChat, fetchHistory, fetchMe, login } from './api'
 import { MessageBubble } from './components/MessageBubble'
 import { TypingIndicator } from './components/TypingIndicator'
+import ApprovalPanel from './components/ApprovalPanel'
 
 // 快捷建议（空状态展示）
 const SUGGESTIONS = [
@@ -20,8 +21,15 @@ export default function App() {
   const [streaming, setStreaming] = useState(false)
   const [error, setError] = useState('')
   const [steps, setSteps] = useState([]) // 图节点执行过程（节点流式）
+  const [identity, setIdentity] = useState(null) // { user_id, role } — 决定审批入口显隐
+  const [view, setView] = useState('chat')      // chat | approval（仅 admin 可切到 approval）
   const messagesEndRef = useRef(null)
   const typeTimerRef = useRef(null)
+
+  // 启动：探测当前身份（有 token 认 token，无 token 回退 guest）
+  useEffect(() => {
+    fetchMe().then(setIdentity)
+  }, [])
 
   // 加载历史
   useEffect(() => {
@@ -36,6 +44,18 @@ export default function App() {
     })
     return () => clearInterval(typeTimerRef.current)
   }, [])
+
+  // 切换身份（开发/演示：/dev/login 签发对应角色 token；生产由微信 OAuth 自动完成）
+  const handleRoleChange = useCallback(async (e) => {
+    const role = e.target.value
+    try {
+      const body = await login({ role })
+      setIdentity({ user_id: body.user_id, role: body.role })
+      if (body.role !== 'admin' && view === 'approval') setView('chat')
+    } catch (err) {
+      setError(err.message)
+    }
+  }, [view])
 
   // 自动滚到底部
   useEffect(() => {
@@ -194,6 +214,30 @@ export default function App() {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            {/* 身份切换（开发/演示用；生产为微信 OAuth 静默识别，此控件移除） */}
+            <div className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800/60 px-2.5 py-1.5">
+              <span className={`h-1.5 w-1.5 rounded-full ${identity?.role === 'admin' ? 'bg-emerald-400' : 'bg-slate-500'}`} />
+              <select
+                value={identity?.role === 'admin' ? 'admin' : 'customer'}
+                onChange={handleRoleChange}
+                className="bg-transparent text-[12px] font-medium text-slate-300 outline-none"
+              >
+                <option value="customer">客户身份</option>
+                <option value="admin">管理员身份</option>
+              </select>
+            </div>
+            {identity?.role === 'admin' && (
+              <button
+                onClick={() => setView(view === 'approval' ? 'chat' : 'approval')}
+                className={`rounded-lg border px-3 py-1.5 text-[12px] font-medium transition-colors active:scale-95 ${
+                  view === 'approval'
+                    ? 'border-brand-500/50 bg-brand-500/15 text-brand-300'
+                    : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:bg-slate-800'
+                }`}
+              >
+                {view === 'approval' ? '返回聊天' : '订单审批'}
+              </button>
+            )}
             <button
               onClick={() => window.location.reload()}
               className="rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-1.5 text-[12px] font-medium text-slate-300 transition-colors hover:bg-slate-800"
@@ -233,6 +277,13 @@ export default function App() {
           </div>
         )}
 
+        {/* 审批视图（仅管理员可见入口，后端 require_admin 兜底） */}
+        {view === 'approval' && identity?.role === 'admin' ? (
+          <main className="thin-scroll flex-1 overflow-y-auto">
+            <ApprovalPanel />
+          </main>
+        ) : (
+        <>
         {/* 消息区 */}
         <main className="thin-scroll flex-1 overflow-y-auto">
           <div className="mx-auto flex max-w-3xl flex-col gap-4 px-4 py-6">
@@ -278,6 +329,8 @@ export default function App() {
             报价仅展示正常售价，AI 不会透露成本与内部信息
           </p>
         </footer>
+        </>
+        )}
       </div>
     </div>
   )

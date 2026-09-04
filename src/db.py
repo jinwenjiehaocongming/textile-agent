@@ -134,6 +134,16 @@ CREATE TABLE IF NOT EXISTS profile (
     updated_at TEXT NOT NULL,
     PRIMARY KEY (user_id, key)
 );
+
+CREATE TABLE IF NOT EXISTS audit_log (
+    id         SERIAL PRIMARY KEY,
+    actor      TEXT NOT NULL,      -- 谁：admin["sub"] / 用户标识
+    action     TEXT NOT NULL,      -- approve / reject / login / ...
+    thread_id  TEXT,               -- 关联的会话（订单审批 thread_id）
+    detail     TEXT,               -- 理由、摘要
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log (actor, id);
 """
 
 

@@ -250,6 +250,9 @@ SYSTEM_PROMPT = """你是【宏润纺织】的 AI 客服。工厂主营化纤面
 8. 【知识/推荐类问题】客户问"推荐什么面料""用什么面料""面料怎么选""哪个适合"时，
    先用检索知识直接给出面料类型结论（并举 1-2 个例子），**不要急着调 search_product 报价**；
    客户明确要价格/现货/下单时再查工具。
+9. 【查单红线】查询订单时，只能展示 query_order_status 工具返回的**真实订单**（订单号、状态、金额
+   必须是工具返回值原样）。没有查到订单就如实说"未查到该订单"，**严禁自己编造订单号或订单卡片**——
+   你拼出的任何 ORD- 开头订单号都不是真实订单。
 
 ## 面料知识参考
 {knowledge}
@@ -392,6 +395,17 @@ async def supervisor_node(state: AgentState) -> dict:
             logger.info("[Supervisor] → 售前 Agent（已完成）")
             return {"query_type": "chat"}
 
+    # Layer 0.5: 下单流程中的客户确认词 → 无条件延续下单 Agent。
+    # 修复（2026-09）：上一轮下单 Agent 只查价/未输出标准确认单时，_detect_continuation
+    # 的关键词命中会失效，"确认"被 LLM 误判为售前 → 客户下单挂在半路。
+    # 规则：prev=place_order 且用户消息是短确认词 → 直接延续，不依赖上轮 AI 文本、不调 LLM。
+    PLACE_ORDER_CONFIRM_WORDS = ("确认", "可以", "好的", "行", "ok", "对", "嗯", "没问题", "确定", "下单")
+    if prev == "place_order" and last is not None and last.type == "human":
+        last_user_text = str(last.content or "").strip().lower()
+        if len(last_user_text) <= 4 and any(w in last_user_text for w in PLACE_ORDER_CONFIRM_WORDS):
+            logger.info("[Supervisor] 下单确认 → 下单 Agent（Layer 0.5）")
+            return {"query_type": "place_order"}
+
     # Layer 1: 规则延续
     if _detect_continuation(messages):
         labels = {"chat": "售前", "place_order": "下单", "after_sales": "售后"}
@@ -420,11 +434,29 @@ async def supervisor_node(state: AgentState) -> dict:
     return {"query_type": qtypes[result]}
 
 
+_ORDER_COMPLETED_RE = re.compile(r"ORD-\d{8}-\d{13,}")
+
+
+def _is_order_completed(text: str) -> bool:
+    """判断文本是否含真实订单完成信号（兼容旧消息/CLI 场景的兜底判断）。
+
+    注意：真实完成信号以 src/order_agent.order_agent_node 挂在返回消息
+    additional_kwargs["order_completed"] 上的标记为准（工具结果，不可伪造）；
+    本函数只作为文本兜底，不再用于 query_type 判定（LLM 文本可能复述
+    历史订单号导致误判，2026-09 已修复）。
+    """
+    if "订单已生成" in text:
+        return True
+    return bool(_ORDER_COMPLETED_RE.search(text))
+
+
 async def order_agent_node(state: AgentState) -> dict:
     logger.info("[下单Agent] 处理订单...")
     reply = await order_agent(state["messages"], customer_id=state.get("user_id", "guest"))
     result = {"messages": state["messages"] + [reply]}
-    if hasattr(reply, "content") and "ORD-" in str(reply.content):
+    # 完成判定以工具结果标记为准（order_agent 内 create_order 真实成功后挂载），
+    # 不再扫描 LLM 回复文本 —— 回复复述历史订单号会误判完成、把 query_type 重置为 chat。
+    if getattr(reply, "additional_kwargs", {}).get("order_completed"):
         result["query_type"] = "chat"
     return result
 
