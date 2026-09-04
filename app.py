@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from pathlib import Path
 from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.types import Command
-from src.agent import build_graph, cheap_llm, thread_config
+from src.agent import build_graph, get_cheap_llm, thread_config
 from src.approval import (
     find_pending_draft, get_pending, list_pending, pending_reply_text, remove_pending,
 )
@@ -136,7 +136,7 @@ async def chat(req: ChatRequest, request: Request):
 
         # 存档 + 异步提取偏好（后台协程）
         await memory.save_messages([HumanMessage(content=req.message), result["messages"][-1]])
-        asyncio.create_task(memory.extract_and_store(result["messages"], cheap_llm))
+        asyncio.create_task(memory.extract_and_store(result["messages"], get_cheap_llm()))
 
         return {"reply": result["messages"][-1].content}
     except Exception as e:
@@ -274,7 +274,7 @@ async def chat_stream(req: ChatRequest, request: Request):
     async def event_gen():
         # 先发一个连接就绪事件，前端据此清空输入、进入等待态
         yield "data: {\"type\": \"start\"}\n\n"
-        async for evt in stream_chat(req.message, memory, agent_graph, cheap_llm, user_id=user_id):
+        async for evt in stream_chat(req.message, memory, agent_graph, get_cheap_llm(), user_id=user_id):
             import json as _json
             yield f"data: {_json.dumps(evt, ensure_ascii=False)}\n\n"
     return StreamingResponse(

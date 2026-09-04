@@ -26,7 +26,7 @@ load_dotenv()
 
 from langchain_core.messages import HumanMessage
 
-from src.agent import build_graph, cheap_llm, thread_config
+from src.agent import build_graph, get_cheap_llm, thread_config
 from src.eval_cases import CASES
 from src.llm_utils import _safe_llm
 from src.mcp_client import init_mcp, get_mcp
