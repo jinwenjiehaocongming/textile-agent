@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   streamChat, fetchHistory, fetchMe, logout,
-  fetchSessions, createSession, deleteSession,
+  fetchSessions, createSession, deleteSession, uuid,
 } from './api'
 import LoginPage from './components/LoginPage'
 import { MessageBubble } from './components/MessageBubble'
@@ -188,7 +188,7 @@ export default function App() {
     fetchHistory(sessionId).then((rows) => {
       if (!alive) return
       setMessages((rows || []).map((r) => ({
-        id: crypto.randomUUID(),
+        id: uuid(),
         role: r.role === 'human' ? 'user' : 'ai',
         content: r.content,
         time: new Date(),
@@ -256,8 +256,8 @@ export default function App() {
       setError('')
       setSteps([]) // 新一轮对话重置执行步骤
 
-      const userMsg = { id: crypto.randomUUID(), role: 'user', content, time: new Date() }
-      const aiMsg = { id: crypto.randomUUID(), role: 'ai', content: '', time: new Date(), streaming: true }
+      const userMsg = { id: uuid(), role: 'user', content, time: new Date() }
+      const aiMsg = { id: uuid(), role: 'ai', content: '', time: new Date(), streaming: true }
       appendMessage(userMsg)
       appendMessage(aiMsg)
       setStreaming(true)
