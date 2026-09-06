@@ -1,7 +1,10 @@
-# 纺织 B2B 智能客服 — docker compose
+# 纺织 B2B 交易智能体 — docker compose
 # 用法：
-#   docker compose up --build          # 构建镜像并启动（首次构建会下载 HF 模型，较慢）
-#   docker compose up --build --build-arg DOWNLOAD_MODELS=0   # 跳过模型下载，容器内挂载 HF 缓存
+#   docker compose up --build          # 构建并启动（首次构建下载 embedding 模型 ~0.4GB）
+#   docker compose up --build --build-arg DOWNLOAD_MODELS=0   # 跳过模型下载（挂载 HF 缓存）
+#
+# 容器入口 scripts/docker_entrypoint.sh 会自动完成：
+#   等 PG/Qdrant → 建表 + 管理员 → 灌知识索引 → 启动（无需手动跑脚本）
 services:
   app:
     build:
@@ -9,6 +12,7 @@ services:
       args:
         DOWNLOAD_MODELS: ${DOWNLOAD_MODELS:-1}
     ports:
+      # 加反向代理(nginx/caddy)时改成 "127.0.0.1:8005:8005"，只让本机/代理访问
       - "8005:8005"
     env_file:
       - .env
@@ -23,26 +27,29 @@ services:
       qdrant:
         condition: service_started
     volumes:
-      - ./index:/app/index          # BM25 索引 + Qdrant LocalMode 备份
+      - ./index:/app/index          # BM25 索引（entrypoint 自动生成，落宿主机便于备份）
       - hf_cache:/root/.cache/huggingface
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8005/healthz', timeout=3)"]
       interval: 30s
       timeout: 5s
-      start_period: 90s
-      retries: 3
+      start_period: 240s
+      retries: 5
 
   postgres:
     image: postgres:16-alpine
     environment:
+      # 生产请改强密码，并同步 app 的 DATABASE_URL
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: study1
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"   # 仅本机可连（调试）；数据库绝不暴露公网
     volumes:
       - pg_data:/var/lib/postgresql/data
+      # 首次初始化自动灌入产品种子（281 条；已初始化过的卷不重跑）
+      - ./sql/001_products.sql:/docker-entrypoint-initdb.d/001_products.sql:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -51,10 +58,11 @@ services:
       retries: 5
 
   qdrant:
+    # 生产建议 pin 稳定版本（如 qdrant/qdrant:v1.12.4）
     image: qdrant/qdrant:latest
     ports:
-      - "6333:6333"
-      - "6334:6334"
+      - "127.0.0.1:6333:6333"   # 仅本机可连（调试）；向量库绝不暴露公网
+      - "127.0.0.1:6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
     restart: unless-stopped

@@ -34,3 +34,6 @@ MCP_MIGRATION_GUIDE.md
 
 # 个人面试准备笔记（不公开）
 面试/
+
+# 部署用临时打包文件
+*.zip

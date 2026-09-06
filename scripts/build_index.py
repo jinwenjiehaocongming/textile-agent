@@ -14,8 +14,12 @@ import json
 import math
 import pickle
 import re
+import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
+
+# 直接以 python scripts/build_index.py 运行时，保证能找到项目根下的 src/
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src import vector_store
 from src.vector_store import reset_collections, upsert_knowledge
