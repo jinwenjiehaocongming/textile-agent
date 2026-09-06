@@ -27,3 +27,5 @@ pytest-asyncio==1.4.0
 # 鉴权（2026-08）：JWT 签发/验签（pyjwt）+ 接口测试客户端（httpx，TestClient 依赖）
 pyjwt==2.13.0
 httpx==0.28.1
+# 账号体系（2026-09）：密码 bcrypt 哈希（登录注册，绝不存明文）
+bcrypt==4.3.0

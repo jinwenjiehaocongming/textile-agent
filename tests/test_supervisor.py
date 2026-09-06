@@ -114,3 +114,79 @@ def test_order_completed_fake_format_not_triggered():
     assert _is_order_completed("订单 ORD-20260822-T400 待确认") is False
     assert _is_order_completed("请确认订单信息，订单号将在审批通过后生成") is False
     assert _is_order_completed("📋 订单确认单\n请确认以上信息是否正确？") is False
+
+
+# ── Layer 0.6：下单流程中补全收货信息也延续（2026-09 修复）──
+
+async def test_place_order_filling_address_continues():
+    """下单 Agent 在等收货信息，客户补地址电话（长句）→ 仍延续下单，不走 LLM。"""
+    state = {
+        "messages": [
+            AIMessage(content="请提供收货电话和地址，方便生成确认单？"),
+            HumanMessage(content="13857577360，钱塘路1102号，10天交期"),
+        ],
+        "query_type": "place_order",
+    }
+    result = await supervisor_node(state)
+    assert result["query_type"] == "place_order"
+
+
+async def test_place_order_filling_quantity_continues():
+    state = {
+        "messages": [
+            AIMessage(content="您需要多少米？黑色 75D 150cm 目前有现货。"),
+            HumanMessage(content="我要3000米"),
+        ],
+        "query_type": "place_order",
+    }
+    result = await supervisor_node(state)
+    assert result["query_type"] == "place_order"
+
+
+async def test_place_order_decline_switches_away(monkeypatch):
+    """客户明确不要了 → 不走延续；mock LLM 判 sales。"""
+    class FakeLLM:
+        async def ainvoke(self, messages):
+            return AIMessage(content="sales")
+    monkeypatch.setattr("src.agent.get_cheap_llm", lambda: FakeLLM())
+    state = {
+        "messages": [
+            AIMessage(content='请确认以上信息是否正确？回复「确认」即可下单。'),
+            HumanMessage(content="先不用了，我再看看其他面料"),
+        ],
+        "query_type": "place_order",
+    }
+    result = await supervisor_node(state)
+    assert result["query_type"] == "chat"
+
+
+# ── Layer 0.6 加固：纯数字补全也延续；AI 收尾问句不误捕 ──
+
+async def test_place_order_pure_digits_fill_continues():
+    """客户补的信息全是数字/路名（无 电话/地址/米 字样），AI 上轮在问 → 仍延续下单。"""
+    state = {
+        "messages": [
+            AIMessage(content="还需要您的收货电话和地址，方便生成确认单，请问？"),
+            HumanMessage(content="13857577360，钱塘路1102，10天"),
+        ],
+        "query_type": "place_order",
+    }
+    result = await supervisor_node(state)
+    assert result["query_type"] == "place_order"
+
+
+async def test_place_order_wrapup_then_new_topic_not_trapped(monkeypatch):
+    """AI 收尾问句后客户转而问别的事（新话题长句）→ 不硬留在下单，交 LLM（mock=sales）。"""
+    class FakeLLM:
+        async def ainvoke(self, messages):
+            return AIMessage(content="sales")
+    monkeypatch.setattr("src.agent.get_cheap_llm", lambda: FakeLLM())
+    state = {
+        "messages": [
+            AIMessage(content="还有其他可以帮您的吗？"),
+            HumanMessage(content="没有了。顺便问一下羽绒服用什么面料比较好？"),
+        ],
+        "query_type": "place_order",
+    }
+    result = await supervisor_node(state)
+    assert result["query_type"] == "chat"

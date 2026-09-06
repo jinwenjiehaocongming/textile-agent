@@ -93,16 +93,21 @@ def test_dev_login_invalid_user_id_400():
 
 # ── /me：身份探测 ────────────────────────────────────────────
 
-def test_me_guest_without_token():
+def test_me_401_without_token():
+    """2026-09：去掉 guest 回退，无 token 一律 401（登录门禁）。"""
     r = client.get("/me")
-    assert r.status_code == 200
-    assert r.json()["role"] == "guest"
+    assert r.status_code == 401
 
 
 def test_me_with_admin_token():
     tok = create_token("dev_admin", role="admin")
     r = client.get("/me", headers={"Authorization": f"Bearer {tok}"})
-    assert r.json() == {"user_id": "dev_admin", "role": "admin"}
+    assert r.status_code == 200
+    body = r.json()
+    # dev token 无对应 DB 账号 → 降级展示 user_id
+    assert body["role"] == "admin"
+    assert body["user_id"] == "dev_admin"
+    assert body["display_name"] == "dev_admin"
 
 
 # ── 审批端点三态（鉴权核心验收）──────────────────────────────

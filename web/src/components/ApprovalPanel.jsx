@@ -3,7 +3,7 @@ import { decideApproval, fetchPending } from '../api'
 
 /**
  * 订单审批面板（销售经理使用，仅 role=admin 可见）。
- * 设计语言与 DataTable.jsx 保持一致：rounded-xl 卡片 + border-slate-800 分隔
+ * 设计语言与 DataTable.jsx 保持一致：rounded-xl 卡片 + border-white/[0.10] 分隔
  * + slate-800/70 表头 + brand 蓝 accent + 语义色按钮（emerald 通过 / rose 拒绝）。
  */
 
@@ -64,12 +64,12 @@ export default function ApprovalPanel() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-[15px] font-semibold tracking-tight text-slate-50">订单审批</h2>
-          <p className="mt-0.5 text-[11px] text-slate-500">待人工确认的下单请求，审批通过后订单落库</p>
+          <p className="mt-0.5 text-[11px] text-slate-400">待人工确认的下单请求，审批通过后订单落库</p>
         </div>
         <button
           onClick={load}
           disabled={loading}
-          className="rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-1.5 text-[12px] font-medium text-slate-300 transition-colors hover:bg-slate-800 disabled:opacity-40"
+          className="rounded-lg border border-white/[0.10] bg-white/[0.05] px-3 py-1.5 text-[12px] font-medium text-slate-300 transition-colors hover:bg-white/[0.07] disabled:opacity-40 active:scale-95"
         >
           {loading ? '加载中…' : '刷新'}
         </button>
@@ -82,24 +82,24 @@ export default function ApprovalPanel() {
       )}
 
       {!loading && pending.length === 0 && !error && (
-        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-800 py-14 text-center">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-800/80 text-slate-400">
+        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-white/[0.10] py-14 text-center">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/[0.06] text-slate-400">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
               <path d="M9 11l3 3L22 4" />
               <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
             </svg>
           </div>
           <p className="mt-3 text-[13px] font-medium text-slate-300">暂无待审批订单</p>
-          <p className="mt-1 text-[12px] text-slate-500">客户发起下单并挂起后，会出现在这里</p>
+          <p className="mt-1 text-[12px] text-slate-400">客户发起下单并挂起后，会出现在这里</p>
         </div>
       )}
 
       {pending.length > 0 && (
-        <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
+        <div className="overflow-hidden rounded-xl border border-white/[0.10] bg-white/[0.04]">
           <div className="thin-scroll overflow-x-auto">
             <table className="w-full min-w-[640px] text-[12px]">
               <thead>
-                <tr className="border-b border-slate-800 bg-slate-800/70 text-left text-[11px] uppercase tracking-wide text-slate-400">
+                <tr className="border-b border-white/[0.10] bg-white/[0.05] text-left text-[11px] uppercase tracking-wide text-slate-400">
                   <th className="px-3 py-2 font-medium">提交时间</th>
                   <th className="px-3 py-2 font-medium">产品</th>
                   <th className="px-3 py-2 font-medium">颜色</th>
@@ -115,7 +115,7 @@ export default function ApprovalPanel() {
                   const busy = busyId === p.thread_id
                   return (
                     <Fragment key={p.thread_id}>
-                      <tr className="border-b border-slate-800 last:border-0 hover:bg-brand-500/10 transition-colors">
+                      <tr className="border-b border-white/[0.10] last:border-0 hover:bg-brand-500/10 transition-colors">
                         <td className="whitespace-nowrap px-3 py-2.5 text-slate-400">{fmtTime(p.created_at)}</td>
                         <td className="px-3 py-2.5 font-medium text-slate-100">{d.product_name || '—'}</td>
                         <td className="px-3 py-2.5 text-slate-300">{d.color || '—'}</td>
@@ -144,14 +144,14 @@ export default function ApprovalPanel() {
                         </td>
                       </tr>
                       {rejectingId === p.thread_id && (
-                        <tr className="border-b border-slate-800 bg-slate-800/40 last:border-0">
+                        <tr className="border-b border-white/[0.10] bg-white/[0.04] last:border-0">
                           <td colSpan={7} className="px-3 py-2.5">
                             <div className="flex items-center gap-2">
                               <input
                                 value={rejectReason}
                                 onChange={(e) => setRejectReason(e.target.value)}
                                 placeholder="填写拒绝原因（可选），将反馈给客户"
-                                className="flex-1 rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-1.5 text-[12px] text-slate-100 outline-none transition-colors placeholder:text-slate-500 focus:border-brand-400 focus:ring-2 focus:ring-brand-500/20"
+                                className="flex-1 rounded-lg border border-white/[0.10] bg-white/[0.06] px-3 py-1.5 text-[12px] text-slate-100 outline-none transition-colors placeholder:text-slate-400/80 focus:border-brand-400 focus:ring-2 focus:ring-brand-500/20"
                               />
                               <button
                                 onClick={() => onDecide(p.thread_id, false)}
@@ -162,7 +162,7 @@ export default function ApprovalPanel() {
                               </button>
                               <button
                                 onClick={() => setRejectingId('')}
-                                className="rounded-lg border border-slate-700 bg-slate-800/60 px-2.5 py-1.5 text-[11px] font-medium text-slate-300 transition-colors hover:bg-slate-800"
+                                className="rounded-lg border border-white/[0.10] bg-white/[0.05] px-2.5 py-1.5 text-[11px] font-medium text-slate-300 transition-colors hover:bg-white/[0.07]"
                               >
                                 取消
                               </button>

@@ -41,7 +41,7 @@ from langchain_core.messages import (AIMessage, HumanMessage, SystemMessage,
 from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from src.retrieval import HybridRetriever
+from src.retrieval import HybridRetriever, rerank_enabled
 from src.order_agent import order_agent_node as order_agent
 from src.after_sales_agent import after_sales_node
 from src.memory import get_user
@@ -227,7 +227,8 @@ async def context_retriever(state: AgentState) -> dict:
     query = state.get("rewrite_query", last_msg)
     logger.info(f"[检索] 查询: {query}")
 
-    results = await retriever.retrieve(query, top_k=5, use_rerank=True)
+    # rerank 受 RERANK_ENABLED 总开关控制（默认关；省 ~1GB 内存/API 费用）
+    results = await retriever.retrieve(query, top_k=5, use_rerank=rerank_enabled())
     chunks = [r["text"] for r in results]
 
     logger.info(f"[检索] 命中 {len(chunks)} 条: {[r['category'] for r in results]}")
@@ -237,7 +238,7 @@ async def context_retriever(state: AgentState) -> dict:
 # ============================================================
 # 6. Agent 节点
 # ============================================================
-SYSTEM_PROMPT = """你是【宏润纺织】的 AI 客服。工厂主营化纤面料（涤塔夫、春亚纺、尼丝纺、牛津布等）。
+SYSTEM_PROMPT = """你是【交易智能体】——专注纺织面料 B2B 交易场景的 AI 助手。对接的工厂主营化纤面料（涤塔夫、春亚纺、尼丝纺、牛津布等）。
 
 ## 规则
 1. 产品价格、库存、规格必须通过 search_product 工具查询，不要编造
@@ -406,6 +407,35 @@ async def supervisor_node(state: AgentState) -> dict:
             logger.info("[Supervisor] 下单确认 → 下单 Agent（Layer 0.5）")
             return {"query_type": "place_order"}
 
+    # Layer 0.6: 下单流程中的补全信息 → 继续留在下单上下文。
+    # 场景：下单 Agent 在收集信息（问电话/地址/数量/规格）或等确认，客户下一句补内容。
+    # 补全句往往没有"下单/电话/地址"字样（例如 "13857577360，钱塘路1102，10天"），
+    # 因此判定以【上一轮 AI 是否在收集/等确认】为主，客户侧只做拒绝/转话题护栏。
+    if prev == "place_order" and last is not None and last.type == "human":
+        txt = str(last.content or "")
+        customer_moves_on = any(k in txt for k in (
+            "不用", "不要", "算了", "取消", "不买", "退款", "别的", "其他",
+            "问问", "咨询", "推荐", "多少钱", "价格", "现货", "介绍",
+            "没有其他", "没有别", "不需要", "再说",
+        ))
+        prev_ai = ""
+        for m in reversed(messages[:-1]):
+            if getattr(m, "type", None) == "ai" and m.content:
+                prev_ai = m.content
+                break
+        if not customer_moves_on and prev_ai:
+            ai_collecting = any(k in prev_ai for k in (
+                "电话", "地址", "交期", "确认单", "请确认", "请提供", "补充",
+                "数量", "多少米", "规格", "颜色", "送货", "收货",
+            ))
+            # AI 在提问，且不是"还有其他可以帮您"这类收尾问句
+            ai_asking = ("？" in prev_ai or "?" in prev_ai) and not any(
+                k in prev_ai for k in ("还有", "其他", "帮您", "帮助", "需求")
+            )
+            if ai_collecting or ai_asking:
+                logger.info("[Supervisor] 下单补全 → 下单 Agent（Layer 0.6）")
+                return {"query_type": "place_order"}
+
     # Layer 1: 规则延续
     if _detect_continuation(messages):
         labels = {"chat": "售前", "place_order": "下单", "after_sales": "售后"}
@@ -553,7 +583,7 @@ async def main():
              "query_type": "chat", "user_id": user_id, "user_context": user_context}
 
     print(f"\n{'='*60}")
-    print(f"🏭 宏润纺织 AI 客服 | 用户: {user_id}")
+    print(f"🏭 交易智能体 | 用户: {user_id}")
     print(f"   对话 {len(history)} 条 | 偏好 {len(prefs)} 条")
     print(f"{'='*60}")
 

@@ -58,7 +58,7 @@ export const MessageBubble = memo(function MessageBubble({ message, last }) {
   return (
     <div className={`flex w-full gap-3 animate-fade-up ${isUser ? 'justify-end' : 'justify-start'}`}>
       {!isUser && (
-        <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-600 text-white">
+        <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-brand-300/25 bg-brand-400/15 text-brand-100 backdrop-blur-md">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
             <path d="M12 2a10 10 0 0 1 10 10c0 5-4 8-10 8-1.2 0-2.4-.2-3.4-.5L4 21l1.2-3.2A9.6 9.6 0 0 1 2 12 10 10 0 0 1 12 2Z" />
           </svg>
@@ -66,17 +66,17 @@ export const MessageBubble = memo(function MessageBubble({ message, last }) {
       )}
 
       <div
-        className={`rounded-2xl px-4 py-2.5 text-[14px] leading-relaxed shadow-soft ${
+        className={`rounded-2xl px-4 py-2.5 text-[14px] leading-relaxed ${
           isUser
-            ? 'max-w-[80%] rounded-br-md bg-brand-600 text-white'
-            : 'rounded-bl-md border border-slate-700/60 bg-slate-900 text-slate-200'
+            ? 'max-w-[80%] rounded-br-md border border-brand-200/40 bg-brand-400/30 text-slate-50 shadow-soft backdrop-blur-md'
+            : 'rounded-bl-md border border-white/[0.12] bg-white/[0.07] text-slate-200 shadow-panel-sm'
         } ${message.data ? 'w-full max-w-[92%]' : 'max-w-[80%]'} ${typing ? 'typing-caret' : ''}`}
       >
         {renderContent(message.content)}
         {message.data && <DataTable data={message.data} />}
         <div
           className={`mt-1 text-[10px] ${
-            isUser ? 'text-brand-100/80' : 'text-slate-500'
+            isUser ? 'text-white/80' : 'text-slate-400'
           }`}
         >
           {time}

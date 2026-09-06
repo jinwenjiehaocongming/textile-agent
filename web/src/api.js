@@ -2,67 +2,89 @@
  * 后端 API 封装。
  * 开发时走 Vite 代理 (/api -> http://127.0.0.1:8005)，避免 CORS。
  * 生产时可通过环境变量覆盖 VITE_API_BASE。
+ *
+ * 鉴权（2026-09 账号体系）：身份一律来自 JWT（Authorization: Bearer <token>）。
+ * 无 token / token 失效 → 后端 401；前端由 App 统一跳回登录页。
+ *
+ * token 存 sessionStorage（每个标签页独立）：
+ * 可开多个窗口分别登录不同账号（客户 + 管理员）互不覆盖。
+ * localStorage 是同源所有标签共享的——后登录者会把别的窗口顶掉。
  */
 const BASE = import.meta.env.VITE_API_BASE || '/api'
 
-/**
- * 用户身份：浏览器本地持久化一个 user_id（对应企业微信 external_userid）。
- * 后端按请求头 X-User-Id 隔离历史/偏好/订单，互不串数据。
- */
-const USER_ID_KEY = 'hongrun_user_id'
 const TOKEN_KEY = 'hongrun_token'
+const store = window.sessionStorage
 
-export function getUserId() {
-  let uid = localStorage.getItem(USER_ID_KEY)
-  if (!uid || !/^[A-Za-z0-9_-]{1,64}$/.test(uid)) {
-    uid = 'u_' + (crypto.randomUUID?.() || `u${Date.now()}_${Math.random().toString(36).slice(2, 10)}`).slice(0, 32)
-    localStorage.setItem(USER_ID_KEY, uid)
-  }
-  return uid
-}
-
-// ── JWT 鉴权（2026-08）──────────────────────────────────────
-// token 优先于 X-User-Id：有 token 后端认 token 里的身份，X-User-Id 仅作开发兜底
 export function getToken() {
-  return localStorage.getItem(TOKEN_KEY) || ''
+  return store.getItem(TOKEN_KEY) || ''
 }
 
 export function setToken(token) {
-  if (token) localStorage.setItem(TOKEN_KEY, token)
-  else localStorage.removeItem(TOKEN_KEY)
+  if (token) store.setItem(TOKEN_KEY, token)
+  else store.removeItem(TOKEN_KEY)
+}
+
+export function clearSession() {
+  store.removeItem(TOKEN_KEY)
 }
 
 function authHeaders(extra = {}) {
-  const headers = { 'X-User-Id': getUserId(), ...extra }
   const token = getToken()
-  if (token) headers['Authorization'] = `Bearer ${token}`
-  return headers
+  return token ? { Authorization: `Bearer ${token}`, ...extra } : { ...extra }
 }
 
-/** 开发/演示登录（后端 /dev/login，生产由微信 OAuth 取代）。切换身份即换 token。 */
-export async function login({ role = 'customer', user_id = '' } = {}) {
-  const resp = await fetch(`${BASE}/dev/login`, {
+/** 统一取后端错误文案（FastAPI detail 可能是字符串/数组） */
+async function readError(resp) {
+  try {
+    const body = await resp.json()
+    if (typeof body?.detail === 'string') return body.detail
+    if (Array.isArray(body?.detail) && body.detail[0]?.msg) return body.detail[0].msg
+  } catch { /* ignore */ }
+  return `请求失败 (${resp.status})`
+}
+
+/** 登录：用户名 + 密码 → {token, user_id, role, display_name} */
+export async function login(username, password) {
+  const resp = await fetch(`${BASE}/auth/login`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-User-Id': getUserId() },
-    body: JSON.stringify({ role, user_id }),
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
   })
-  if (!resp.ok) throw new Error(`登录失败 (${resp.status})`)
+  if (!resp.ok) throw new Error(await readError(resp))
   const body = await resp.json()
   setToken(body.token)
-  return body // { token, user_id, role }
+  return body
 }
 
-/** 探测当前身份（前端据此显隐审批入口；授权仍以服务端为准） */
+/** 注册（后端强制 customer 角色）：成功即自动登录 */
+export async function register({ username, password, display_name = '' }) {
+  const resp = await fetch(`${BASE}/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password, display_name }),
+  })
+  if (!resp.ok) throw new Error(await readError(resp))
+  const body = await resp.json()
+  setToken(body.token)
+  return body
+}
+
+/** 登出：清本地 token（服务端无状态） */
+export function logout() {
+  clearSession()
+}
+
+/** 探测当前身份 {user_id, role, username, display_name}；未登录/失效 → null */
 export async function fetchMe() {
   const resp = await fetch(`${BASE}/me`, { headers: authHeaders() })
-  if (!resp.ok) return { user_id: 'guest', role: 'guest' }
+  if (!resp.ok) return null
   return resp.json()
 }
 
 /** 待审批订单列表（仅管理员，403 时抛错） */
 export async function fetchPending() {
   const resp = await fetch(`${BASE}/approval/pending`, { headers: authHeaders() })
-  if (!resp.ok) throw new Error(`加载待审批失败 (${resp.status})`)
+  if (!resp.ok) throw new Error(await readError(resp))
   const body = await resp.json()
   return body.pending || []
 }
@@ -74,7 +96,7 @@ export async function decideApproval(action, threadId, reason = '') {
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ thread_id: threadId, reason }),
   })
-  if (!resp.ok) throw new Error(`审批失败 (${resp.status})`)
+  if (!resp.ok) throw new Error(await readError(resp))
   return resp.json()
 }
 
@@ -88,7 +110,7 @@ export async function decideApproval(action, threadId, reason = '') {
  * @param {(full: string, data?: object) => void} onDone
  * @param {(err: string) => void} onError
  */
-export async function streamChat(message, { onStart, onReset, onToken, onNode, onDone, onError }) {
+export async function streamChat(message, { sessionId = '', onStart, onReset, onToken, onNode, onDone, onError }) {
   // 超时保护：后端网关不稳定时，避免前端无限转圈
   const controller = new AbortController()
   const timeoutTimer = setTimeout(() => controller.abort(), 60000) // 60s 硬超时
@@ -97,7 +119,7 @@ export async function streamChat(message, { onStart, onReset, onToken, onNode, o
     resp = await fetch(`${BASE}/chat/stream`, {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message, session_id: sessionId }),
       signal: controller.signal,
     })
   } catch (e) {
@@ -175,9 +197,55 @@ export async function streamChat(message, { onStart, onReset, onToken, onNode, o
   }
 }
 
-/** 拉取历史聊天记录 */
-export async function fetchHistory() {
-  const resp = await fetch(`${BASE}/history`, { headers: authHeaders() })
+/** 拉取某会话的历史聊天记录 */
+export async function fetchHistory(sessionId = '') {
+  const q = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ''
+  const resp = await fetch(`${BASE}/history${q}`, { headers: authHeaders() })
   if (!resp.ok) return []
   return resp.json()
+}
+
+// ── 多会话（2026-09）───────────────────────────────────────
+export async function fetchSessions() {
+  const resp = await fetch(`${BASE}/sessions`, { headers: authHeaders() })
+  if (!resp.ok) throw new Error(await readError(resp))
+  const body = await resp.json()
+  return body.sessions || []
+}
+
+export async function createSession(title = '') {
+  const resp = await fetch(`${BASE}/sessions`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ title }),
+  })
+  if (!resp.ok) throw new Error(await readError(resp))
+  return resp.json() // { session_id, title }
+}
+
+export async function renameSession(sessionId, title) {
+  const resp = await fetch(`${BASE}/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'PATCH',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ title }),
+  })
+  if (!resp.ok) throw new Error(await readError(resp))
+  return resp.json()
+}
+
+export async function deleteSession(sessionId) {
+  const resp = await fetch(`${BASE}/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  })
+  if (!resp.ok) throw new Error(await readError(resp))
+  return resp.json()
+}
+
+/** 我的历史订单（行级隔离，只看自己的） */
+export async function fetchOrders() {
+  const resp = await fetch(`${BASE}/orders`, { headers: authHeaders() })
+  if (!resp.ok) throw new Error(await readError(resp))
+  const body = await resp.json()
+  return body.orders || []
 }

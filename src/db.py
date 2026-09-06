@@ -121,11 +121,17 @@ CREATE TABLE IF NOT EXISTS refunds (
 CREATE TABLE IF NOT EXISTS conversations (
     id         SERIAL PRIMARY KEY,
     user_id    TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT 'default',  -- 多会话隔离（2026-09）
     role       TEXT NOT NULL,
     content    TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations (user_id, id);
+
+-- 老库升级（幂等）：无 session_id 列的 conversations 补列（存量数据归入 'default'）
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS session_id TEXT NOT NULL DEFAULT 'default';
+
+CREATE INDEX IF NOT EXISTS idx_conversations_session ON conversations (user_id, session_id, id);
 
 CREATE TABLE IF NOT EXISTS profile (
     user_id    TEXT NOT NULL,
@@ -144,6 +150,26 @@ CREATE TABLE IF NOT EXISTS audit_log (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log (actor, id);
+
+CREATE TABLE IF NOT EXISTS users (
+    id            TEXT PRIMARY KEY,      -- 对外 user_id（uuid4 hex，无横线）
+    username      TEXT UNIQUE NOT NULL,  -- 登录名（小写归一化）
+    password_hash TEXT NOT NULL,         -- bcrypt 哈希，绝不存明文
+    display_name  TEXT NOT NULL DEFAULT '',
+    role          TEXT NOT NULL DEFAULT 'customer',  -- customer | admin
+    status        TEXT NOT NULL DEFAULT 'active',    -- active | disabled
+    created_at    TEXT NOT NULL
+);
+
+-- 多会话（2026-09）：每个用户可新建多个对话，历史按 session 隔离
+CREATE TABLE IF NOT EXISTS sessions (
+    id         TEXT PRIMARY KEY,      -- session_id（uuid4 hex）
+    user_id    TEXT NOT NULL,
+    title      TEXT NOT NULL DEFAULT '新对话',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id, updated_at);
 """
 
 
@@ -158,5 +184,5 @@ async def ensure_schema() -> None:
 async def reset_schema() -> None:
     """清空全部业务表（测试隔离用）。"""
     async with get_engine().begin() as conn:
-        await conn.execute(text("DROP TABLE IF EXISTS products, orders, refunds, conversations, profile CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS sessions, users, products, orders, refunds, conversations, profile CASCADE"))
     await ensure_schema()

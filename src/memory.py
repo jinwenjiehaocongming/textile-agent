@@ -45,28 +45,35 @@ else:
 _dict_cache: dict[str, list] = {}
 
 
-def _cache_load_recent(user_id: str, n: int = 50) -> list:
+def _cache_key(user_id: str, session_id: str = "default") -> str:
+    return f"chat:{user_id}:{session_id}"
+
+
+def _cache_load_recent(user_id: str, n: int = 50, session_id: str = "default") -> list:
+    key = _cache_key(user_id, session_id)
     if _use_redis:
-        raw = _r.lrange(f"chat:{user_id}", -n, -1)
+        raw = _r.lrange(key, -n, -1)
         return [json.loads(m) for m in raw]
-    return _dict_cache.get(user_id, [])[-n:]
+    return _dict_cache.get(key, [])[-n:]
 
 
-def _cache_append(user_id: str, msg: dict):
+def _cache_append(user_id: str, msg: dict, session_id: str = "default"):
+    key = _cache_key(user_id, session_id)
     if _use_redis:
-        _r.rpush(f"chat:{user_id}", json.dumps(msg, ensure_ascii=False))
-        _r.ltrim(f"chat:{user_id}", -50, -1)
-        _r.expire(f"chat:{user_id}", 3600)
+        _r.rpush(key, json.dumps(msg, ensure_ascii=False))
+        _r.ltrim(key, -50, -1)
+        _r.expire(key, 3600)
     else:
-        _dict_cache.setdefault(user_id, []).append(msg)
-        _dict_cache[user_id] = _dict_cache[user_id][-50:]
+        _dict_cache.setdefault(key, []).append(msg)
+        _dict_cache[key] = _dict_cache[key][-50:]
 
 
-def _cache_clear(user_id: str):
+def _cache_clear(user_id: str, session_id: str = "default"):
+    key = _cache_key(user_id, session_id)
     if _use_redis:
-        _r.delete(f"chat:{user_id}")
+        _r.delete(key)
     else:
-        _dict_cache.pop(user_id, None)
+        _dict_cache.pop(key, None)
 
 
 # ============================================================
@@ -76,29 +83,30 @@ class UserMemory:
     def __init__(self, user_id: str):
         self.user_id = user_id
 
-    # ── Layer 2: 对话历史（PostgreSQL）──
-    async def save_messages(self, new_messages: list) -> None:
-        """保存消息到热缓存 + PostgreSQL。"""
+    # ── Layer 2: 对话历史（PostgreSQL，按 session 隔离）──
+    async def save_messages(self, new_messages: list, session_id: str = "default") -> None:
+        """保存消息到热缓存 + PostgreSQL（session_id 区分对话）。"""
         for m in new_messages:
             if m.type in ("human", "ai"):
-                await asyncio.to_thread(_cache_append, self.user_id, {"role": m.type, "content": m.content})
+                await asyncio.to_thread(_cache_append, self.user_id, {"role": m.type, "content": m.content}, session_id)
                 await execute(
-                    "INSERT INTO conversations (user_id, role, content, created_at) "
-                    "VALUES (:uid, :role, :content, :ts)",
-                    {"uid": self.user_id, "role": m.type, "content": m.content,
+                    "INSERT INTO conversations (user_id, session_id, role, content, created_at) "
+                    "VALUES (:uid, :sid, :role, :content, :ts)",
+                    {"uid": self.user_id, "sid": session_id, "role": m.type, "content": m.content,
                      "ts": datetime.now().isoformat()},
                 )
 
-    async def load_recent(self, n: int = 30) -> list:
-        """加载最近 N 轮对话：Redis 优先，未命中再查 PG。"""
-        cached = await asyncio.to_thread(_cache_load_recent, self.user_id, n)
+    async def load_recent(self, n: int = 30, session_id: str = "default") -> list:
+        """加载某会话最近 N 条：Redis 优先，未命中再查 PG。"""
+        cached = await asyncio.to_thread(_cache_load_recent, self.user_id, n, session_id)
         if cached:
             return [HumanMessage(content=m["content"]) if m["role"] == "human"
                     else AIMessage(content=m["content"]) for m in cached]
 
         rows = await query_all(
-            "SELECT role, content FROM conversations WHERE user_id = :uid ORDER BY id DESC LIMIT :n",
-            {"uid": self.user_id, "n": n},
+            "SELECT role, content FROM conversations "
+            "WHERE user_id = :uid AND session_id = :sid ORDER BY id DESC LIMIT :n",
+            {"uid": self.user_id, "sid": session_id, "n": n},
         )
         messages = []
         for row in reversed(rows):
@@ -106,7 +114,7 @@ class UserMemory:
                 messages.append(HumanMessage(content=row["content"]))
             else:
                 messages.append(AIMessage(content=row["content"]))
-            await asyncio.to_thread(_cache_append, self.user_id, {"role": row["role"], "content": row["content"]})
+            await asyncio.to_thread(_cache_append, self.user_id, {"role": row["role"], "content": row["content"]}, session_id)
         return messages
 
     async def get_last_query_type(self) -> str:

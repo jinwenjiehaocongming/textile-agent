@@ -26,7 +26,15 @@ def register_pending(thread_id: str, user_id: str, draft: dict) -> None:
             "user_id": user_id,
             "draft": draft,
             "created_at": time.time(),
+            "session_id": "",   # 提交时的会话（app 层补记，供审批结果回写）
         }
+
+
+def set_pending_session(thread_id: str, session_id: str) -> None:
+    """补记挂起发生在哪个会话（chat/stream 检测到 interrupt 后调用）。"""
+    with _lock:
+        if thread_id in _pending:
+            _pending[thread_id]["session_id"] = session_id or ""
 
 
 def list_pending() -> list:

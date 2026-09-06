@@ -29,6 +29,16 @@ if Path(os.path.expanduser("~/.cache/huggingface")).exists():
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
+def rerank_enabled() -> bool:
+    """Rerank 总开关（2026-09）：环境变量 RERANK_ENABLED=1 才开启。
+
+    本地 CrossEncoder ~1GB、或走重排 API 都要花钱/内存；
+    默认关闭，混合检索（向量+BM25+RRF）本身 Hit@3 已达 100%。
+    评测脚本显式传 use_rerank 做消融，不受本开关影响。
+    """
+    return os.getenv("RERANK_ENABLED", "0") == "1"
+
+
 # CrossEncoder 懒加载：模型 ~1GB，首次 rerank 时才加载（import 不阻塞）
 _reranker = None
 

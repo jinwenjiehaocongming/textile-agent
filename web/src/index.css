@@ -8,9 +8,96 @@
     -moz-osx-font-smoothing: grayscale;
     color-scheme: dark;
   }
+
+  /* ── 海面式深蓝渐变底（静态层）── */
   body {
-    @apply bg-slate-950 text-slate-200 font-sans;
+    @apply font-sans text-slate-200;
+    background-color: #080d18;
+    background-image: linear-gradient(180deg, #1b2c49 0%, #12203a 34%, #0c1526 68%, #080d18 100%);
+    background-attachment: fixed;
   }
+
+  #root {
+    position: relative;
+    z-index: 1;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════
+   背景光晕层（#aurora-bg，fixed 在最底层）
+   淡蓝光团缓慢漂移，玻璃面板透过这层光形成质感。
+   ════════════════════════════════════════════════════════════ */
+#aurora-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  background:
+    radial-gradient(95% 75% at 20% -12%, rgba(140, 175, 255, 0.22), transparent 60%),
+    radial-gradient(85% 65% at 110% 10%, rgba(122, 160, 255, 0.16), transparent 58%),
+    radial-gradient(75% 65% at 50% 134%, rgba(140, 168, 255, 0.16), transparent 60%);
+}
+
+#aurora-bg i {
+  position: absolute;
+  border-radius: 9999px;
+  will-change: transform;
+}
+
+/* 淡蓝光团：缓慢漂移（上一版节奏，肉眼不躁动） */
+.a1 {
+  top: -12%;
+  left: -8%;
+  width: 58vw;
+  height: 58vw;
+  background: radial-gradient(circle, rgba(140, 175, 255, 0.32), transparent 66%);
+  animation: wave1 32s ease-in-out infinite alternate;
+}
+.a2 {
+  bottom: -18%;
+  right: -10%;
+  width: 55vw;
+  height: 55vw;
+  background: radial-gradient(circle, rgba(158, 192, 255, 0.24), transparent 64%);
+  animation: wave2 42s ease-in-out infinite alternate;
+}
+.a3 {
+  top: 30%;
+  left: 52%;
+  width: 44vw;
+  height: 44vw;
+  background: radial-gradient(circle, rgba(176, 202, 255, 0.17), transparent 62%);
+  animation: wave3 48s ease-in-out infinite alternate;
+}
+.a4 {
+  top: -6%;
+  right: 16%;
+  width: 40vw;
+  height: 40vw;
+  background: radial-gradient(circle, rgba(130, 165, 255, 0.22), transparent 64%);
+  animation: wave4 27s ease-in-out infinite alternate;
+}
+
+@keyframes wave1 {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to   { transform: translate3d(9vw, 6vh, 0) scale(1.22); }
+}
+@keyframes wave2 {
+  from { transform: translate3d(0, 0, 0) scale(1.08); }
+  to   { transform: translate3d(-8vw, -7vh, 0) scale(1); }
+}
+@keyframes wave3 {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to   { transform: translate3d(-6vw, 10vh, 0) scale(1.15); }
+}
+@keyframes wave4 {
+  from { transform: translate3d(0, 0, 0) scale(1.1); }
+  to   { transform: translate3d(5vw, -6vh, 0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #aurora-bg i { animation: none !important; }
 }
 
 /* 打字机光标 */
@@ -30,12 +117,12 @@
   50% { opacity: 0; }
 }
 
-/* 细滚动条 */
+/* 细滚动条（玻璃化：白色半透明 thumb） */
 .thin-scroll::-webkit-scrollbar {
   width: 6px;
 }
 .thin-scroll::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.22);
+  background: rgba(255, 255, 255, 0.14);
   border-radius: 3px;
 }
 .thin-scroll::-webkit-scrollbar-track {

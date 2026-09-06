@@ -24,9 +24,9 @@ from langchain_core.messages import AIMessage, HumanMessage
 from src.render_tools import extract_data_from_tools, extract_render_data
 
 
-async def build_input_state(req_message: str, memory, user_id: str) -> dict:
+async def build_input_state(req_message: str, memory, user_id: str, session_id: str = "default") -> dict:
     """构建与 app.py /chat 一致的状态（异步）。"""
-    history = await memory.load_recent(20)
+    history = await memory.load_recent(20, session_id)
     prefs = await memory.retrieve_preferences()
     user_context = "；".join(prefs) if prefs else ""
 
@@ -62,6 +62,7 @@ async def stream_chat(
     graph,
     cheap_llm,
     user_id: str = "123456",
+    session_id: str = "default",
 ) -> AsyncIterator[dict]:
     """产出事件：start → node*/token* → done / pending / error（全异步）。"""
     from src.agent import thread_config
@@ -69,7 +70,7 @@ async def stream_chat(
     from src.node_events import NODE_LABELS, describe_node
     from src.token_stream import set_token_pusher
 
-    state = await build_input_state(req_message, memory, user_id)
+    state = await build_input_state(req_message, memory, user_id, session_id)
     config = thread_config(user_id)
 
     try:
@@ -122,8 +123,13 @@ async def stream_chat(
                         interrupted = True
                         reply = pending_reply_text(draft)
                         await memory.save_messages(
-                            [HumanMessage(content=req_message), AIMessage(content=reply)]
+                            [HumanMessage(content=req_message), AIMessage(content=reply)],
+                            session_id,
                         )
+                        await _touch(session_id, memory.user_id, req_message)
+                        await memory.save_last_query_type("chat")
+                        from src.approval import set_pending_session
+                        set_pending_session(user_id, session_id)
                         yield {
                             "type": "pending",
                             "content": reply,
@@ -165,8 +171,15 @@ async def stream_chat(
 
         # 存档本轮（与 /chat 一致）：human + 最终 AI 回复
         await memory.save_messages(
-            [HumanMessage(content=req_message), AIMessage(content=final_reply)]
+            [HumanMessage(content=req_message), AIMessage(content=final_reply)],
+            session_id,
         )
+        await _touch(session_id, memory.user_id, req_message)
+        # 关键修复（2026-09）：流式路径此前不持久化 query_type，
+        # Supervisor 的 prev 永远停在 chat，"下单确认/补全信息"永远无法延续到下单 Agent。
+        qtype = (values or {}).get("query_type")
+        if qtype:
+            await memory.save_last_query_type(qtype)
         try:
             # 异步提取偏好：后台协程（不阻塞当前回复）
             asyncio.create_task(memory.extract_and_store(
@@ -179,3 +192,13 @@ async def stream_chat(
         import traceback
         traceback.print_exc()
         yield {"type": "error", "content": f"系统异常: {str(e)[:200]}, 请稍后重试"}
+
+async def _touch(session_id: str, user_id: str, preview: str) -> None:
+    """消息落库后维护会话元数据（更新时间/自动标题），default 会话跳过。"""
+    if session_id in ("", "default"):
+        return
+    try:
+        from src.sessions import touch_session
+        await touch_session(user_id, session_id, preview)
+    except Exception:
+        pass

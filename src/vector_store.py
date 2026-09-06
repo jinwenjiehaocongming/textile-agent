@@ -11,6 +11,7 @@
 embedding 仍在客户端（本地 bge-base-zh），Qdrant 只存向量与 payload。
 """
 import asyncio
+import hashlib
 import os
 from typing import Any, Optional
 
@@ -122,15 +123,20 @@ async def upsert_knowledge(items: list[dict[Any, Any]]) -> None:
 
 
 async def upsert_memory(user_id: str, text: str, timestamp: str) -> None:
-    """写入一条用户偏好（payload 带 user_id，实现行级多租户隔离）。"""
+    """写入一条用户偏好（payload 带 user_id，实现行级多租户隔离）。
+
+    id 用 user_id+text 的哈希 → 幂等去重：同一条偏好重复写入会覆盖而非追加
+    （修复 2026-09：PointStruct 的 id 传 None 在 qdrant-client 1.19 会报校验错误）。
+    """
     await ensure_collections()
     client = get_client()
     vector = _embedder().encode([text], show_progress_bar=False).tolist()[0]
+    point_id = hashlib.md5(f"{user_id}:{text}".encode("utf-8")).hexdigest()
     await _run(
         client.upsert,
         collection_name=MEMORY_COLLECTION,
         points=[models.PointStruct(
-            id=None, vector=vector,
+            id=point_id, vector=vector,
             payload={"user_id": user_id, "text": text, "timestamp": timestamp},
         )],
     )

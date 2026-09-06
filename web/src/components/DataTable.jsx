@@ -25,11 +25,11 @@ function fmt(v, suffix = '') {
 function ProductsTable({ products }) {
   const list = Array.isArray(products) ? products : [products]
   return (
-    <div className="my-2 overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
+    <div className="my-2 overflow-hidden rounded-xl border border-white/[0.10] bg-white/[0.04]">
       <div className="thin-scroll overflow-x-auto">
         <table className="w-full min-w-[520px] text-[12px]">
           <thead>
-            <tr className="border-b border-slate-800 bg-slate-800/70 text-left text-[11px] uppercase tracking-wide text-slate-400">
+            <tr className="border-b border-white/[0.10] bg-white/[0.05] text-left text-[11px] uppercase tracking-wide text-slate-400">
               <th className="px-3 py-2 font-medium">产品</th>
               <th className="px-3 py-2 font-medium">颜色</th>
               <th className="px-3 py-2 font-medium">规格</th>
@@ -43,14 +43,14 @@ function ProductsTable({ products }) {
             {list.map((p, i) => (
               <tr
                 key={i}
-                className="border-b border-slate-800 last:border-0 hover:bg-brand-500/10 transition-colors"
+                className="border-b border-white/[0.10] last:border-0 hover:bg-brand-500/10 transition-colors"
               >
                 <td className="px-3 py-2.5 font-medium text-slate-100">{fmt(p.name)}</td>
                 <td className="px-3 py-2.5 text-slate-300">{fmt(p.color)}</td>
                 <td className="px-3 py-2.5 text-slate-300">{fmt(p.weight)}</td>
                 <td className="px-3 py-2.5 text-slate-300">{fmt(p.width)}</td>
                 <td className="px-3 py-2.5 text-right font-semibold text-brand-300">
-                  <span className="text-[10px] text-slate-500">¥</span>
+                  <span className="text-[10px] text-slate-400">¥</span>
                   {fmt(p.price, '/米')}
                 </td>
                 <td className="px-3 py-2.5 text-right text-slate-300">{fmt(p.moq, '米')}</td>
@@ -80,17 +80,17 @@ function OrderCard({ order }) {
   ].filter(([, v]) => v)
 
   return (
-    <div className="my-2 overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
-      <div className="flex items-center gap-2 border-b border-slate-800 bg-slate-800/70 px-4 py-2.5">
+    <div className="my-2 overflow-hidden rounded-xl border border-white/[0.10] bg-white/[0.04]">
+      <div className="flex items-center gap-2 border-b border-white/[0.10] bg-white/[0.05] px-4 py-2.5">
         <span className="text-[12px] font-semibold text-slate-100">📋 订单信息</span>
         {order.status && (
           <StatusBadge status={order.status} />
         )}
       </div>
-      <dl className="divide-y divide-slate-800 px-4 text-[12px]">
+      <dl className="divide-y divide-white/10 px-4 text-[12px]">
         {rows.map(([k, v]) => (
           <div key={k} className="flex justify-between gap-4 py-2">
-            <dt className="shrink-0 text-slate-500">{k}</dt>
+            <dt className="shrink-0 text-slate-400">{k}</dt>
             <dd className="text-right font-medium text-slate-100">{v}</dd>
           </div>
         ))}
@@ -109,15 +109,15 @@ function RefundCard({ refund }) {
   ].filter(([, v]) => v)
 
   return (
-    <div className="my-2 overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
-      <div className="flex items-center gap-2 border-b border-slate-800 bg-slate-800/70 px-4 py-2.5">
+    <div className="my-2 overflow-hidden rounded-xl border border-white/[0.10] bg-white/[0.04]">
+      <div className="flex items-center gap-2 border-b border-white/[0.10] bg-white/[0.05] px-4 py-2.5">
         <span className="text-[12px] font-semibold text-slate-100">↩️ 退款单</span>
         {refund.status && <StatusBadge status={refund.status} />}
       </div>
-      <dl className="divide-y divide-slate-800 px-4 text-[12px]">
+      <dl className="divide-y divide-white/10 px-4 text-[12px]">
         {rows.map(([k, v]) => (
           <div key={k} className="flex justify-between gap-4 py-2">
-            <dt className="shrink-0 text-slate-500">{k}</dt>
+            <dt className="shrink-0 text-slate-400">{k}</dt>
             <dd className="text-right font-medium text-slate-100">{v}</dd>
           </div>
         ))}
@@ -129,7 +129,7 @@ function RefundCard({ refund }) {
 // ── 状态徽章（深色） ───────────────────────────────────────
 function StatusBadge({ status }) {
   const s = String(status || '')
-  let cls = 'bg-slate-800 text-slate-300 border-slate-700'
+  let cls = 'bg-white/[0.07] text-slate-300 border-white/[0.10]'
   if (s.includes('待付款') || s.includes('处理中')) cls = 'bg-amber-500/10 text-amber-300 border-amber-500/30'
   else if (s.includes('已付款') || s.includes('已完成') || s.includes('通过')) cls = 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
   else if (s.includes('已发货')) cls = 'bg-brand-500/10 text-brand-300 border-brand-500/30'

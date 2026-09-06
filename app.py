@@ -20,14 +20,22 @@ from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.types import Command
 from src.agent import build_graph, get_cheap_llm, thread_config
 from src.approval import (
-    find_pending_draft, get_pending, list_pending, pending_reply_text, remove_pending,
+    find_pending_draft, get_pending, list_pending, pending_reply_text,
+    remove_pending, set_pending_session,
 )
-from src.auth import create_token, require_admin, AuthError
-from src.db import execute
+from src.auth import create_token, require_admin, get_current_user, AuthError
+from src.db import execute, query_all
 from src.memory import get_user
 from src.mcp_client import init_mcp
 from src.stream_chat import stream_chat
-from src.user_identity import is_valid_user_id, resolve_user_id
+from src.user_identity import is_valid_user_id
+from src.sessions import (
+    create_session, delete_session, get_owned_session,
+    list_sessions, rename_session, touch_session,
+)
+from src.users import (
+    auth_user, create_user, get_user_by_id, UsernameTaken,
+)
 
 # ── 鉴权开关：DEV_MODE=1 时注册 /dev/login（mock 微信身份，开发/演示用）──
 DEV_MODE = os.getenv("DEV_MODE") == "1"
@@ -49,7 +57,7 @@ async def lifespan(app: FastAPI):
     await get_mcp().shutdown()
 
 
-app = FastAPI(title="宏润纺织 AI 客服", lifespan=lifespan)
+app = FastAPI(title="交易智能体", lifespan=lifespan)
 agent_graph = build_graph()
 
 # ── CORS：允许独立前端 (Vite dev server) 跨域访问 ──
@@ -61,47 +69,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── 用户身份：从请求头 X-User-Id 注入（企业微信场景对应 external_userid）──
-# 解析/校验规则见 src.user_identity（与 src.memory 共用同一份约束）：
-#   - 缺省 → 降级到 guest（开发期便利，多用户场景必传）
-#   - 显式传入但非法 → 400 拒绝（防目录穿越 / 注入）
-def _user_id_from_header(request: Request) -> str:
-    try:
-        return resolve_user_id(request.headers.get("X-User-Id"))
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-def _resolve_identity(request: Request) -> dict:
-    """客户面身份解析（鉴权过渡期策略）：
-    - 有 Authorization: Bearer <JWT> → 验签解析，返回真实身份（微信/登录签发）
-    - 无 token → 回退 X-User-Id（开发过渡；生产接入 OAuth 后移除该回退，强制 token）
-    """
-    auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Bearer "):
-        try:
-            return _decode_token(auth_header[7:].strip())
-        except AuthError as e:
-            raise HTTPException(status_code=e.status, detail=e.detail)
-    uid = _user_id_from_header(request)
-    return {"user_id": uid, "role": "guest"}
-
-
-def _decode_token(token: str) -> dict:
-    from src.auth import decode_token
-    return decode_token(token)
+# ── 用户身份：一律来自 JWT（Authorization: Bearer <token>）──
+# 2026-09：去掉 X-User-Id / guest 回退（防任意冒充），无 token 一律 401。
+# 受保护端点统一声明 `user: dict = Depends(get_current_user)`，
+# user["user_id"] 即账号 uuid，行级隔离 key 与 thread_id 顺延用它。
+# /auth/*、/healthz 与静态页保持公开；/dev/login 仅 DEV_MODE=1 注册（本地演示用）。
 
 
 class ChatRequest(BaseModel):
     message: str
+    session_id: str = ""   # 多会话（2026-09）：空/缺省 → 'default' 遗留会话
+
+
+async def _resolve_session(user_id: str, session_id: str) -> str:
+    """解析并校验会话归属：'default' 始终放行（历史数据），其余必须属于该用户。"""
+    sid = (session_id or "").strip() or "default"
+    if sid != "default" and not await get_owned_session(user_id, sid):
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return sid
 
 
 @app.post("/chat")
-async def chat(req: ChatRequest, request: Request):
+async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     import asyncio
     try:
-        # 每个请求独立取用户记忆，互不串数据（身份：JWT 优先，无 token 回退 X-User-Id）
-        user_id = _resolve_identity(request)["user_id"]
+        user_id = user["user_id"]
+        session_id = await _resolve_session(user_id, req.session_id)
         memory = get_user(user_id)
         config = thread_config(user_id)
 
@@ -112,7 +105,7 @@ async def chat(req: ChatRequest, request: Request):
             return {"reply": pending_reply_text(draft), "pending": True, "draft": draft}
 
         # 加载历史 + 偏好（异步）
-        history = await memory.load_recent(20)
+        history = await memory.load_recent(20, session_id)
         prefs = await memory.retrieve_preferences()
         user_context = "；".join(prefs) if prefs else ""
 
@@ -128,14 +121,19 @@ async def chat(req: ChatRequest, request: Request):
         if draft:
             reply = pending_reply_text(draft)
             await memory.save_last_query_type("chat")
-            await memory.save_messages([HumanMessage(content=req.message), AIMessage(content=reply)])
+            await memory.save_messages(
+                [HumanMessage(content=req.message), AIMessage(content=reply)], session_id)
+            set_pending_session(user_id, session_id)
+            await touch_session(user_id, session_id, req.message)
             return {"reply": reply, "pending": True, "draft": draft}
 
         # 保存本轮状态供下一轮延续
         await memory.save_last_query_type(result.get("query_type", "chat"))
 
         # 存档 + 异步提取偏好（后台协程）
-        await memory.save_messages([HumanMessage(content=req.message), result["messages"][-1]])
+        await memory.save_messages(
+            [HumanMessage(content=req.message), result["messages"][-1]], session_id)
+        await touch_session(user_id, session_id, req.message)
         asyncio.create_task(memory.extract_and_store(result["messages"], get_cheap_llm()))
 
         return {"reply": result["messages"][-1].content}
@@ -146,26 +144,71 @@ async def chat(req: ChatRequest, request: Request):
 
 
 @app.get("/history")
-async def get_history(request: Request):
-    user_id = _resolve_identity(request)["user_id"]
+async def get_history(user: dict = Depends(get_current_user), session_id: str = ""):
+    user_id = user["user_id"]
+    session_id = await _resolve_session(user_id, session_id)
     memory = get_user(user_id)
-    rows = await memory.load_recent(30)
+    rows = await memory.load_recent(30, session_id)
     return [{"role": m.type, "content": m.content} for m in rows]
 
 
 # ════════════════════════════════════════════════════════════
-# 鉴权：身份探测 + 开发模式 mock 登录
-# ── /me：前端启动时探测当前身份（role 决定审批入口显隐）
-# ── /dev/login：仅 DEV_MODE=1 注册；mock 微信身份，返回与 OAuth 回调一致的 {token, role}
+# 账号：注册 / 登录（2026-09，取代 /dev/login 成为正式身份源）
+# ── POST /auth/register  开放注册（仅 customer）→ 自动登录签发 token
+# ── POST /auth/login     用户名 + 密码 → {token, user_id, role, display_name}
+# ── GET  /me             登录态探测（无 token → 401，前端据此跳登录页）
+# ── POST /dev/login      仅 DEV_MODE=1 注册（本地演示便利，生产消失）
 # ════════════════════════════════════════════════════════════
 
-@app.get("/me")
-async def me(request: Request):
-    """返回当前身份 {user_id, role}。无/无效 token → guest（前端据此隐藏审批入口）。"""
+class RegisterBody(BaseModel):
+    username: str
+    password: str
+    display_name: str = ""
+
+
+class LoginBody(BaseModel):
+    username: str
+    password: str
+
+
+def _issue_token(user_pub: dict) -> dict:
+    """签发 token 并拼出登录响应（auth.py「换证」思想：前端只认 {token, role}）。"""
+    token = create_token(user_pub["user_id"], role=user_pub["role"])
+    return {**user_pub, "token": token}
+
+
+@app.post("/auth/register")
+async def auth_register(body: RegisterBody):
+    """开放注册：角色强制 customer（admin 只能由 scripts/create_admin.py 创建）。"""
     try:
-        return _resolve_identity(request)
-    except HTTPException:
-        return {"user_id": "guest", "role": "guest"}
+        pub = await create_user(body.username, body.password, body.display_name)
+    except UsernameTaken as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await _audit(pub["user_id"], "register", detail=f"username={pub['username']}")
+    return _issue_token(pub)
+
+
+@app.post("/auth/login")
+async def auth_login(body: LoginBody):
+    """登录：校验通过签发 JWT；失败统一 401（不泄露用户名是否存在）。"""
+    pub = await auth_user(body.username, body.password)
+    if not pub:
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    return _issue_token(pub)
+
+
+@app.get("/me")
+async def me(user: dict = Depends(get_current_user)):
+    """返回当前身份 {user_id, role, username, display_name}。无 token → 401。"""
+    row = await get_user_by_id(user["user_id"])
+    return {
+        "user_id": user["user_id"],
+        "role": user["role"],
+        "username": (row or {}).get("username", ""),
+        "display_name": (row or {}).get("display_name") or user["user_id"],
+    }
 
 
 if DEV_MODE:
@@ -175,7 +218,7 @@ if DEV_MODE:
 
     @app.post("/dev/login")
     async def dev_login(body: DevLoginBody):
-        """开发/演示用 mock 登录：签发任意角色的 JWT（生产由微信 OAuth 取代）。"""
+        """开发/演示用 mock 登录：签发任意角色的 JWT（演示/测试便利，生产由账号登录取代）。"""
         role = body.role if body.role in ("customer", "admin") else "customer"
         uid = (body.user_id or "").strip() or ("dev_admin" if role == "admin" else "dev_customer")
         if not is_valid_user_id(uid):
@@ -233,7 +276,9 @@ async def _resume_approval(thread_id: str, approved: bool, reason: str = "", act
             ai_text = m.content
             break
     if ai_text:
-        await get_user(thread_id).save_messages([AIMessage(content=ai_text)])
+        info = get_pending(thread_id) or {}
+        sid = info.get("session_id") or "default"
+        await get_user(thread_id).save_messages([AIMessage(content=ai_text)], sid)
 
     # 审计：谁批的、批了什么、理由
     await _audit(actor, "approve" if approved else "reject", thread_id, reason)
@@ -267,14 +312,16 @@ def healthz():
 
 # ── SSE 流式聊天端点（供 React 前端使用）──
 @app.post("/chat/stream")
-async def chat_stream(req: ChatRequest, request: Request):
-    user_id = _resolve_identity(request)["user_id"]
+async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
+    user_id = user["user_id"]
+    session_id = await _resolve_session(user_id, req.session_id)
     memory = get_user(user_id)
 
     async def event_gen():
         # 先发一个连接就绪事件，前端据此清空输入、进入等待态
         yield "data: {\"type\": \"start\"}\n\n"
-        async for evt in stream_chat(req.message, memory, agent_graph, get_cheap_llm(), user_id=user_id):
+        async for evt in stream_chat(req.message, memory, agent_graph, get_cheap_llm(),
+                                     user_id=user_id, session_id=session_id):
             import json as _json
             yield f"data: {_json.dumps(evt, ensure_ascii=False)}\n\n"
     return StreamingResponse(
@@ -288,6 +335,57 @@ async def chat_stream(req: ChatRequest, request: Request):
     )
 
 
+# ════════════════════════════════════════════════════════════
+# 多会话（2026-09）：会话列表 / 新建 / 改名 / 删除
+# ════════════════════════════════════════════════════════════
+
+class SessionBody(BaseModel):
+    title: str = ""
+
+
+@app.get("/sessions")
+async def sessions_list(user: dict = Depends(get_current_user)):
+    """当前用户的会话列表（按最近活跃倒序）。"""
+    return {"sessions": await list_sessions(user["user_id"])}
+
+
+@app.post("/sessions")
+async def sessions_create(body: SessionBody, user: dict = Depends(get_current_user)):
+    """新建会话（title 可留空，首条消息后自动命名）。"""
+    return await create_session(user["user_id"], body.title)
+
+
+@app.patch("/sessions/{sid}")
+async def sessions_rename(sid: str, body: SessionBody,
+                          user: dict = Depends(get_current_user)):
+    if not await rename_session(user["user_id"], sid, body.title):
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return {"ok": True}
+
+
+@app.delete("/sessions/{sid}")
+async def sessions_delete(sid: str, user: dict = Depends(get_current_user)):
+    if not await delete_session(user["user_id"], sid):
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return {"ok": True}
+
+
+# ════════════════════════════════════════════════════════════
+# 历史订单（2026-09）：客户查看自己的订单（行级隔离）
+# ════════════════════════════════════════════════════════════
+
+@app.get("/orders")
+async def my_orders(user: dict = Depends(get_current_user)):
+    """当前用户的历史订单（按时间倒序）。"""
+    rows = await query_all(
+        "SELECT order_no, product_id, product_name, color, quantity, unit_price, total, "
+        "status, phone, address, delivery_date, created_at "
+        "FROM orders WHERE customer_id = :uid ORDER BY id DESC LIMIT 100",
+        {"uid": user["user_id"]},
+    )
+    return {"orders": rows}
+
+
 # ── /api 前缀兼容：web/dist 生产前端请求 /api/xxx（vite 开发代理剥前缀后也是后端无前缀路由）──
 # 与上方无前缀路由共享同一组 handler，仅路径不同
 # ⚠️ 必须注册在静态 mount 之前（Starlette 按注册顺序匹配）
@@ -296,12 +394,19 @@ from fastapi import APIRouter
 _api = APIRouter(prefix="/api")
 _api.post("/chat")(chat)
 _api.get("/history")(get_history)
+_api.post("/auth/register")(auth_register)
+_api.post("/auth/login")(auth_login)
 _api.get("/me")(me)
 _api.get("/approval/pending")(approval_pending)
 _api.post("/approval/approve")(approval_approve)
 _api.post("/approval/reject")(approval_reject)
 _api.get("/healthz")(healthz)
 _api.post("/chat/stream")(chat_stream)
+_api.get("/sessions")(sessions_list)
+_api.post("/sessions")(sessions_create)
+_api.patch("/sessions/{sid}")(sessions_rename)
+_api.delete("/sessions/{sid}")(sessions_delete)
+_api.get("/orders")(my_orders)
 if DEV_MODE:
     _api.post("/dev/login")(dev_login)
 app.include_router(_api)
@@ -321,7 +426,7 @@ else:
 if __name__ == "__main__":
     import uvicorn
     print("="*50)
-    print("🏭 宏润纺织 AI 客服 Web 版")
+    print("🏭 交易智能体 Web 版")
     print("   打开 http://127.0.0.1:8005")
     print("="*50)
     uvicorn.run(app, host="0.0.0.0", port=8005, log_level="warning")
