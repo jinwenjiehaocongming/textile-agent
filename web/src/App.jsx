@@ -8,6 +8,7 @@ import { MessageBubble } from './components/MessageBubble'
 import { TypingIndicator } from './components/TypingIndicator'
 import ApprovalPanel from './components/ApprovalPanel'
 import OrderList from './components/OrderList'
+import UserList from './components/UserList'
 
 // 快捷建议（空状态展示）
 const SUGGESTIONS = [
@@ -51,6 +52,7 @@ const VIEW_META = {
   chat: { title: 'AI 客服助手', sub: '纺织产品 · 下单 · 售后' },
   orders: { title: '我的订单', sub: '历史下单记录 · 状态跟踪' },
   approval: { title: '订单审批', sub: '待人工确认的下单请求' },
+  users: { title: '用户管理', sub: '已注册账号一览' },
 }
 
 export default function App() {
@@ -340,6 +342,7 @@ export default function App() {
   const showChat = view === 'chat'
   const showOrders = view === 'orders'
   const showApproval = view === 'approval' && isAdmin
+  const showUsers = view === 'users' && isAdmin
 
   const goView = (v) => {
     setView(view === v ? 'chat' : v)
@@ -432,7 +435,7 @@ export default function App() {
         {/* 上：顶栏 */}
         <header className="flex shrink-0 items-center justify-between gap-2 rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2.5 shadow-panel-sm backdrop-blur-2xl sm:gap-3 sm:px-4">
           <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-brand-300/25 bg-brand-400/15 text-brand-100 backdrop-blur-md">
+            <div className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-brand-300/25 bg-brand-400/15 text-brand-100 backdrop-blur-md md:flex">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M12 2a10 10 0 0 1 10 10c0 5-4 8-10 8-1.2 0-2.4-.2-3.4-.5L4 21l1.2-3.2A9.6 9.6 0 0 1 2 12 10 10 0 0 1 12 2Z" /></svg>
             </div>
             <div className="min-w-0">
@@ -457,39 +460,32 @@ export default function App() {
               </span>
             </div>
 
-            {/* 我的订单（所有人） */}
-            <button
+            {/* 视图切换：窄屏(<md)只显示图标，桌面(≥md)图标+文字 */}
+            <ViewToggle
+              active={showOrders}
+              label="我的订单"
+              title="我的订单"
               onClick={() => goView('orders')}
-              className={`shrink-0 whitespace-nowrap rounded-lg border px-2.5 py-1.5 text-[11px] font-medium transition-colors active:scale-95 sm:px-3 sm:text-[12px] ${
-                showOrders
-                  ? 'border-brand-300/40 bg-brand-400/20 text-brand-100'
-                  : 'border-white/10 bg-white/[0.05] text-slate-300 hover:bg-white/[0.07]'
-              }`}
-            >
-              {showOrders ? '返回聊天' : '我的订单'}
-            </button>
-
-            {/* 订单审批（仅管理员） */}
+              icon={<path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4zM3 6h18M16 10a4 4 0 0 1-8 0" />}
+            />
             {isAdmin && (
-              <button
+              <ViewToggle
+                active={showApproval}
+                label="订单审批"
+                title="订单审批"
                 onClick={() => goView('approval')}
-                className={`shrink-0 whitespace-nowrap rounded-lg border px-2.5 py-1.5 text-[11px] font-medium transition-colors active:scale-95 sm:px-3 sm:text-[12px] ${
-                  showApproval
-                    ? 'border-brand-300/40 bg-brand-400/20 text-brand-100'
-                    : 'border-white/10 bg-white/[0.05] text-slate-300 hover:bg-white/[0.07]'
-                }`}
-              >
-                {showApproval ? '返回聊天' : '订单审批'}
-              </button>
+                icon={<path d="M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />}
+              />
             )}
-
-            <button
-              onClick={handleNewSession}
-              className="hidden shrink-0 items-center gap-1 whitespace-nowrap rounded-lg border border-white/10 bg-white/[0.05] px-3 py-1.5 text-[12px] font-medium text-slate-300 transition-colors hover:bg-white/[0.07] active:scale-95 sm:flex"
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
-              新对话
-            </button>
+            {isAdmin && (
+              <ViewToggle
+                active={showUsers}
+                label="用户管理"
+                title="已注册用户"
+                onClick={() => goView('users')}
+                icon={<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />}
+              />
+            )}
 
             <button
               onClick={handleLogout}
@@ -504,8 +500,14 @@ export default function App() {
           </div>
         </header>
 
-        {/* 中：审批 / 订单 / 对话 面板 */}
-        {showApproval ? (
+        {/* 中：审批 / 用户 / 订单 / 对话 面板 */}
+        {showUsers ? (
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.02] shadow-panel backdrop-blur-xl">
+            <main className="thin-scroll flex-1 overflow-y-auto">
+              <UserList />
+            </main>
+          </div>
+        ) : showApproval ? (
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.02] shadow-panel backdrop-blur-xl">
             <main className="thin-scroll flex-1 overflow-y-auto">
               <ApprovalPanel />
@@ -633,5 +635,27 @@ function EmptyState({ onPick }) {
         ))}
       </div>
     </div>
+  )
+}
+
+
+/** 顶栏视图切换按钮：<md 仅图标，≥md 图标+文字（给右侧腾出空间） */
+function ViewToggle({ active, label, title, onClick, icon }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title || label}
+      aria-label={label}
+      className={`flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-lg border transition-colors active:scale-95 md:w-auto md:px-2.5 ${
+        active
+          ? 'border-brand-300/40 bg-brand-400/20 text-brand-100'
+          : 'border-white/10 bg-white/[0.05] text-slate-300 hover:bg-white/[0.07]'
+      }`}
+    >
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        {icon}
+      </svg>
+      <span className="ml-1.5 hidden whitespace-nowrap text-[12px] font-medium md:inline">{label}</span>
+    </button>
   )
 }

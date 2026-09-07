@@ -386,6 +386,21 @@ async def my_orders(user: dict = Depends(get_current_user)):
     return {"orders": rows}
 
 
+# ════════════════════════════════════════════════════════════
+# 用户管理（2026-09）：管理员查看已注册用户（只读，含状态/角色）
+# 绝不返回 password_hash；仅 require_admin
+# ════════════════════════════════════════════════════════════
+
+@app.get("/admin/users")
+async def admin_users(admin: dict = Depends(require_admin)):
+    rows = await query_all(
+        "SELECT username, display_name, role, status, created_at "
+        "FROM users ORDER BY created_at DESC LIMIT 500",
+    )
+    return {"users": rows}
+
+
+
 # ── /api 前缀兼容：web/dist 生产前端请求 /api/xxx（vite 开发代理剥前缀后也是后端无前缀路由）──
 # 与上方无前缀路由共享同一组 handler，仅路径不同
 # ⚠️ 必须注册在静态 mount 之前（Starlette 按注册顺序匹配）
@@ -407,6 +422,7 @@ _api.post("/sessions")(sessions_create)
 _api.patch("/sessions/{sid}")(sessions_rename)
 _api.delete("/sessions/{sid}")(sessions_delete)
 _api.get("/orders")(my_orders)
+_api.get("/admin/users")(admin_users)
 if DEV_MODE:
     _api.post("/dev/login")(dev_login)
 app.include_router(_api)

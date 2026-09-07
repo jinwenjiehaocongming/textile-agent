@@ -259,6 +259,14 @@ export async function deleteSession(sessionId) {
   return resp.json()
 }
 
+/** 已注册用户列表（仅管理员；服务端 require_admin 兜底） */
+export async function fetchAdminUsers() {
+  const resp = await fetch(`${BASE}/admin/users`, { headers: authHeaders() })
+  if (!resp.ok) throw new Error(await readError(resp))
+  const body = await resp.json()
+  return body.users || []
+}
+
 /** 我的历史订单（行级隔离，只看自己的） */
 export async function fetchOrders() {
   const resp = await fetch(`${BASE}/orders`, { headers: authHeaders() })

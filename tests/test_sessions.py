@@ -88,3 +88,29 @@ async def test_orders_empty_and_isolated():
         r = await c.get("/orders", headers=h)
         assert r.status_code == 200
         assert r.json()["orders"] == []
+async def test_admin_users_endpoint_role_gate():
+    """用户列表：仅管理员可看（200），普通客户 403；响应不含 password_hash。"""
+    from src.auth import create_token
+    from src.users import get_user_by_id
+
+    async with await _api() as c:
+        # 两个普通注册用户（customer）
+        reg_c = (await c.post("/auth/register", json={
+            "username": "userlist_c", "password": "pass123456"})).json()
+        reg_a = (await c.post("/auth/register", json={
+            "username": "userlist_a", "password": "pass123456"})).json()
+
+        tok_c = reg_c["token"]                                  # customer token
+        tok_a = create_token(reg_a["user_id"], role="admin")    # admin token（同账号）
+
+        # 客户访问 → 403
+        assert (await c.get("/admin/users",
+                            headers={"Authorization": f"Bearer {tok_c}"})).status_code == 403
+
+        # 管理员访问 → 200，能看到两个账号，且绝无 password_hash 字段
+        r = await c.get("/admin/users", headers={"Authorization": f"Bearer {tok_a}"})
+        assert r.status_code == 200
+        names = [u["username"] for u in r.json()["users"]]
+        assert "userlist_c" in names and "userlist_a" in names
+        raw = r.text
+        assert "password_hash" not in raw
