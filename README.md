@@ -37,10 +37,28 @@
 - **售后处理** — 查订单 → 对照退货规则 → 生成退款工单
 - **双层审核** — 规则快速拦截 + LLM 安全审查
 - **三层记忆** — Redis 热缓存（可选）+ PostgreSQL 对话存档（user_id 行级隔离）+ Qdrant 长期偏好
-- **多用户隔离** — `X-User-Id` 请求头按用户隔离历史/偏好/订单（`src/user_identity.py` 单一校验源）
-- **官方 MCP SDK** — 三个工具 Server 用 FastMCP 重写，客户端用官方 `mcp` SDK（ClientSession + stdio_client 异步）管理子进程生命周期
+- **双凭证鉴权** — 短期 access（JWT 15 分钟，无状态）+ **可轮换 refresh**（Redis 存哈希、
+  每次刷新轮换、旧 token 重放判定重用即注销整个会话）；`users.token_version` + 60s 读穿缓存
+  让改密码/封号/全端下线**秒级生效**；Redis 不可用时登录刷新 **fail-closed 503**
+- **限流与审计** — Redis 令牌桶（登录 IP / 账号+IP 失败 / 注册 / 刷新 / 聊天 / 分析）；
+  管理动作与敏感读取全部写 `audit_log`
+- **管理员数据分析 Agent** — 一句话中文提问 → 规划 → **只读 SQL**（独立只读角色 +
+  事务只读 + 语句校验强制 LIMIT + 结果封顶，四层防护）→ 自纠错 → 结论（数字逐个回查证据，
+  查无出处自动降级为"谨慎采信"）→ 声明式图表（**数值由程序填，模型编不了**）
+- **管理端工作台** — 全站订单（筛选/分页）、订单**状态机**流转、退款审核、经营指标；
+  管理员界面与客户端按角色分界面（侧栏管理导航 + "客户视角"入口）
+- **退单联动** — 退款工单与订单状态打通：建单 → 订单「退款中」，通过 → 「已退款」（退款前
+  未付款则「已取消」），驳回 → **原样退回**；工单与订单同事务，不变量可自检
+- **租户边界** — 订单级工具按 `order_no + customer_id` 校验归属，身份由服务端**覆盖注入**
+  （不是提示词约束），缺身份 fail-closed
+- **官方 MCP SDK** — 四个工具 Server（产品/订单/售后/只读分析）用 FastMCP，客户端用官方 `mcp` SDK（ClientSession + stdio_client 异步）管理子进程生命周期
+- **数据完整性** — 金额 `numeric` 精确到分、7 条外键（RESTRICT/CASCADE 按业务语义分开）、
+  演示数据与治理脚本（清理/回填全部 dry-run 默认 + 审计留痕）
 - **全链路异步** — LangGraph `ainvoke`、节点 async、LLM `astream` 单事件循环（企业级演进）
-- **评估体系** — 检索消融评测 85 题 + 端到端规则评测 25 题（五类场景：售前/下单/售后/闲聊/安全）+ LLM-as-Judge 四维评分 (11/11)
+- **评估体系** — 检索消融 85 题 + 端到端规则 25 题 + LLM-as-Judge 四维 (11/11) +
+  **数据分析 9 题**（带参考 SQL 的真值、题目/结果/数字/编造四个维度自动判分，当前 9/9）
+- **测试与 CI** — pytest 251 条 + 前端 4 套 Node 测试；GitHub Actions 起 PostgreSQL/Redis
+  容器跑全量（最近一次 success）
 
 ## 快速开始
 
@@ -67,7 +85,9 @@ python app.py
 # 打开 http://127.0.0.1:8005
 ```
 
-> 多用户：Web 请求带请求头 `X-User-Id`（前端自动处理）；非法值返回 400，缺省降级 `guest`。
+> 登录：Web 端用账号密码注册/登录（`POST /auth/register|login`）拿双凭证，前端自动带
+> `Authorization: Bearer`。**旧的 `X-User-Id` 请求头回退已在 2026-09 移除** ——
+> 那个机制允许任意冒充（请求头写谁就是谁），现在无 token 一律 401。
 
 > 鉴权（2026-08）：管理端点（`/approval/*`）已加 JWT 鉴权（无 token 401 / 非管理员 403），审批动作写 `audit_log` 审计表。
 >
@@ -119,7 +139,7 @@ python app.py
 > 登出、踢设备、会话列表都走服务端。Redis 不可用时登录/刷新 **fail-closed 返回 503**
 > （鉴权不能 fail-open），已签发的 access 在 15 分钟内仍有效。
 > `GET /me` 返回当前身份（前端据此显隐审批入口）；`POST /dev/login`（仅 `DEV_MODE=1` 注册）支持切换客户/管理员身份（mock 微信身份）。
-> 生产接入企业微信 OAuth 后，`X-User-Id` 回退与 `/dev/login` 一并移除。
+> 生产接入企业微信 OAuth 后，`/dev/login` 一并移除（`X-User-Id` 回退已于 2026-09 移除）。
 
 ## 架构
 
@@ -143,7 +163,7 @@ flowchart LR
     style O fill:#e7f3ff,stroke:#4a90d9
 ```
 
-**存储**：业务数据 → PostgreSQL（products 281 条 / orders / refunds / conversations / profile）；知识 → Qdrant 集合 `textile_knowledge`（142 条）+ BM25 索引；Embedding/Rerank → BAAI bge 本地模型。图执行过程经 SSE 实时推给前端（节点事件流式）。
+**存储**：业务数据 → PostgreSQL（products 281 条 / orders 602 单 / refunds / pending_approvals / conversations / profile / audit_log）；知识 → Qdrant 集合 `textile_knowledge`（142 条）+ BM25 索引；Embedding/Rerank → BAAI bge 本地模型。图执行过程经 SSE 实时推给前端（节点事件流式）。
 
 ## 评估
 
