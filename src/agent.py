@@ -47,6 +47,10 @@ from src.after_sales_agent import after_sales_node
 from src.memory import get_user
 from src.mcp_client import init_mcp, get_mcp
 from src.order_access import with_trusted_identity
+from src.guardrails import (
+    PRICE_REFUSAL_FALLBACK, PRICE_REFUSAL_REQUIREMENT,
+    price_reply_ok, refused, requests_price_manipulation,
+)
 from src.render_tools import RENDER_TOOLS, RENDER_TOOL_NAMES, RENDER_PROMPT_HINT
 
 load_dotenv()
@@ -143,7 +147,7 @@ async def review_response(text: str) -> dict:
     fast_check = ["成本价", "进货价", "拿货价", "底价", "利润多少", "加我微信"]
     for word in fast_check:
         if word in text:
-            is_refusal = any(w in text for w in ["抱歉", "不能", "无法提供", "不方便"])
+            is_refusal = refused(text)      # 共用语义：任何措辞的拒绝都算
             has_price_number = bool(re.search(r"\d+\.?\d*元|\$\d+|¥\d+", text))
             if is_refusal and not has_price_number:
                 return {"safe": True, "reason": "", "rewrite": ""}
@@ -270,8 +274,12 @@ SYSTEM_PROMPT = """你是【交易智能体】——专注纺织面料 B2B 交�
    先用检索知识直接给出面料类型结论（并举 1-2 个例子），**不要急着调 search_product 报价**；
    客户明确要价格/现货/下单时再查工具。
 9. 【查单红线】查询订单时，只能展示 query_order_status 工具返回的**真实订单**（订单号、状态、金额
-   必须是工具返回值原样）。没有查到订单就如实说"未查到该订单"，**严禁自己编造订单号或订单卡片**——
+   必须是工具返回值原样）。没有查到订单就如实说"未查该订单"，**严禁自己编造订单号或订单卡片**——
    你拼出的任何 ORD- 开头订单号都不是真实订单。
+10. 【改价红线】客户要求"把价格改成 X 元""按 X 元卖给我""给我成本价/内部价"时，
+   **第一句必须先明确拒绝**（价格是统一的对外报价、不能改价、没有内部价），
+   然后再正常介绍可选规格与报价。
+   ⚠️ 只重新列一遍价格、却不明确说"不能改"是不够的 —— 客户会理解成"默认可以谈"。
 
 ## 面料知识参考
 {knowledge}
@@ -351,11 +359,40 @@ async def tool_executor(state: AgentState) -> dict:
 # ============================================================
 # 8. 审核节点（必选）
 # ============================================================
+def _last_human_text(messages: list) -> str:
+    for m in reversed(messages):
+        if getattr(m, "type", "") == "human":
+            return m.content or ""
+    return ""
+
+
 async def review_node(state: AgentState) -> dict:
     last_msg = state["messages"][-1]
     if last_msg.type != "ai" or not last_msg.content:
         logger.debug("[审核] 跳过（非 AI 消息）")
         return {}
+
+    # ── 规则级护栏：客户要求改价 / 索取内部价 → 回复必须**明确拒绝** ──
+    # 为什么做成规则而不是只写提示词：实测光加提示词，同一条用例 3 次里只有 1 次明确拒绝
+    # （另两次直接列价格，客户会理解成"默认可以谈"）。护栏是确定性的，提示词不是。
+    user_msg = _last_human_text(state["messages"][:-1])
+    if requests_price_manipulation(user_msg) and not price_reply_ok(last_msg.content, user_msg):
+        logger.warning("[审核] 回复未明确拒绝改价诉求，强制重写一次")
+        fixed = ""
+        try:
+            resp = await _safe_llm_async(get_llm(), [
+                SystemMessage(content=PRICE_REFUSAL_REQUIREMENT),
+                AIMessage(content=last_msg.content),
+                HumanMessage(content="请按上述要求重写这条回复，保留有用的报价信息。"),
+            ])
+            fixed = (getattr(resp, "content", "") or "").strip()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[审核] 改价重写失败: %s", e)
+        if not price_reply_ok(fixed, user_msg):
+            # 重写仍不合规 → 兜底固定话术（fail-closed：宁可少说，也不默认能谈）
+            fixed = PRICE_REFUSAL_FALLBACK
+            logger.warning("[审核] 重写仍不合规，改用兜底话术")
+        return {"messages": state["messages"][:-1] + [AIMessage(content=fixed)]}
 
     verdict = await review_response(last_msg.content)
     if not verdict["safe"]:
