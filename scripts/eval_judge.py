@@ -53,25 +53,36 @@ JUDGE_PROMPT = """你是严格的客服质量评审员。根据【客户问题�
 {answer}"""
 
 
-def judge_question(question: str, answer: str):
-    """LLM 裁判评分。解析失败/调用失败返回 None。"""
+def judge_question(question: str, answer: str, llm=None):
+    """LLM 裁判评分。解析失败/调用失败返回 None（**但会把原因打出来**）。
+
+    ⚠️ 两个真实踩过的坑：
+    1. 这里原来引用的是裸 `cheap_llm` —— 它在 `e51cff0`（修 CI 无 key 收集崩溃）时被去掉，
+       于是这一行抛 `NameError`；而当时的 `except Exception: return None` 把它**吞掉了**，
+       结果每条用例都静默返回 None：报告显示 "Judge 通过 0/25"，却没有任何错误信息，
+       谁也不知道裁判根本没跑（简历里那个"11/11"因此长期不可复现）。
+       → 现在固定走 `get_cheap_llm()`，并且失败时把异常打出来（静默失败比报错危险得多）。
+    2. 别再用裸 `except: return None` 掩盖问题：日志里必须有痕迹。
+    """
     prompt = JUDGE_PROMPT.format(question=question[:300], answer=answer[:1500])
     try:
-        resp = _safe_llm(cheap_llm, [HumanMessage(content=prompt)])
-        text = resp.content.strip()
+        resp = _safe_llm(llm or get_cheap_llm(), [HumanMessage(content=prompt)])
+        text = (resp.content or "").strip()
         m = re.search(r"\{.*\}", text, re.S)
         if not m:
+            print(f"  ⚠️ 裁判返回不含 JSON：{text[:120]!r}")
             return None
         data = json.loads(m.group(0))
         for dim in DIMS:
             data[dim] = int(data.get(dim, 0))
         data["reason"] = str(data.get("reason", ""))[:200]
         return data
-    except Exception:
+    except Exception as e:  # noqa: BLE001
+        print(f"  ⚠️ 裁判调用/解析失败：{type(e).__name__}: {str(e)[:160]}")
         return None
 
 
-def run_case(graph, case: dict, user_id: str) -> tuple:
+async def run_case(graph, case: dict, user_id: str) -> tuple:
     """跑完整图，返回 (reply, 规则断言结果)。HITL：下单挂起时自动审批通过。"""
     state = {
         "messages": case["messages"],
@@ -82,17 +93,19 @@ def run_case(graph, case: dict, user_id: str) -> tuple:
         "user_context": "",
     }
     cfg = thread_config(user_id)
-    result = graph.invoke(state, config=cfg)
+    result = await graph.ainvoke(state, config=cfg)
     if "__interrupt__" in result:
         from langgraph.types import Command
-        result = graph.invoke(Command(resume={"approved": True}), config=cfg)
+        result = await graph.ainvoke(Command(resume={"approved": True}), config=cfg)
     reply = result["messages"][-1].content or ""
     return reply, bool(case["check"](reply))
 
 
-def main():
+async def main():
     print("🔌 连接 MCP + 构建 graph...")
-    init_mcp({
+    # ⚠️ 必须 await：init_mcp 是异步的；漏掉时协程不执行，随后 get_mcp() 抛
+    # "MCP 未初始化" —— 脚本从异步化起就是坏的，简历里的 11/11 因此长期不可复现。
+    await init_mcp({
         "product": ["python3", "src/mcp_servers/product_server.py"],
         "order":   ["python3", "src/mcp_servers/order_server.py"],
         "refund":  ["python3", "src/mcp_servers/refund_server.py"],
@@ -107,7 +120,7 @@ def main():
 
     for case in CASES:
         try:
-            reply, rule_ok = run_case(graph, case, user_id="eval_user")
+            reply, rule_ok = await run_case(graph, case, user_id="eval_user")
             scores = judge_question(case["messages"][-1].content, reply)
         except Exception as e:
             reply, rule_ok, scores = f"异常: {str(e)[:60]}", False, None
@@ -157,8 +170,9 @@ def main():
     (out / "eval_judge.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"📄 报告已写入 eval_results/eval_judge.json")
-    mcp.shutdown()
+    await mcp.shutdown()
 
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())
