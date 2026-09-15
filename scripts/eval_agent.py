@@ -20,6 +20,22 @@ from langchain_core.messages import HumanMessage
 from src.agent import build_graph, thread_config
 from src.eval_cases import CASES
 from src.mcp_client import init_mcp, get_mcp
+from src.render_tools import extract_render_data
+
+
+def visible_text(result: dict) -> tuple:
+    """返回 (供断言的文本, 原始回复文本)。
+
+    断言必须看**用户实际看到的东西**：报价/规格常常是通过结构化卡片渲染的
+    （render 工具），文本里只剩一句"以上就是报价明细"。
+    只断言文本，会把"已经报价了"判成"没报价" —— 实测踩过（售前-最低价查询）。
+    """
+    reply = (result.get("messages") or [None])[-1]
+    reply = (getattr(reply, "content", "") or "")
+    card = extract_render_data(result.get("messages") or [])
+    if card:
+        return reply + "\n[结构化卡片] " + json.dumps(card, ensure_ascii=False), reply
+    return reply, reply
 
 
 
@@ -42,8 +58,8 @@ async def run_case(graph, case: dict, user_id: str) -> tuple:
         # 再取最终回复（订单号只有审批通过后才生成）。
         from langgraph.types import Command
         result = await graph.ainvoke(Command(resume={"approved": True}), config=cfg)
-    reply = result["messages"][-1].content or ""
-    passed = case["check"](reply)
+    visible, reply = visible_text(result)
+    passed = case["check"](visible)
     return passed, reply
 
 
