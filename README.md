@@ -24,6 +24,38 @@
   <img src="docs/assets/screenshots/order-flow-full.png" width="92%" alt="完整下单路线（报价→确认单→审批→订单号）">
 </p>
 
+**管理端控制台**：管理员登录后落在「经营工作台」（不是客服对话），侧栏是管理导航；
+下面的图都是真实运行截图（含演示数据），不是设计稿。
+
+<p align="center">
+  <b>① 经营工作台</b> — 待处理事项（待审批 / 待发货 / 退款待审含在途敞口 / 未付款）+
+  经营概况 + 近 7 天趋势 + 最近订单，点指标直接带筛选跳到对应页面<br>
+  <img src="docs/assets/screenshots/admin-dashboard.png" width="92%" alt="经营工作台">
+</p>
+
+<p align="center">
+  <b>② 订单管理</b> — 全站订单（状态/关键词筛选 + 分页），操作列按**订单状态机**给出合法动作；
+  处于退款流程的订单显示「待退款审核 #121」，不能发货也不能取消<br>
+  <img src="docs/assets/screenshots/admin-orders.png" width="92%" alt="订单管理（全站订单 + 状态机动作）">
+</p>
+
+<p align="center">
+  <b>③ 退款审核</b> — 退款工单审核（CAS 只能审一次）；卡片上直接标出
+  <b>订单状态 退款中 / 退款前 已发货</b>，通过或驳回会联动订单状态<br>
+  <img src="docs/assets/screenshots/admin-refunds.png" width="92%" alt="退款审核（含退款前状态）">
+</p>
+
+<p align="center">
+  <b>④ 数据分析 Agent</b> — 一句话提问 → 六个节点流水线实时可见 → 结论（数字逐个回查证据）
+  → 图表（声明式意图 + 程序填数）+ 口径说明与数据局限声明<br>
+  <img src="docs/assets/screenshots/admin-analytics.png" width="92%" alt="数据分析 Agent 的结论与图表">
+</p>
+
+<p align="center">
+  <b>⑤ 订单审批</b> — HITL 人工审批（下单必须经此步才写库）<br>
+  <img src="docs/assets/screenshots/admin-approval.png" width="92%" alt="订单审批（HITL）">
+</p>
+
 ---
 
 ## ✨ 功能亮点
