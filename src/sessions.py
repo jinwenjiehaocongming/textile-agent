@@ -35,6 +35,8 @@ async def get_owned_session(user_id: str, session_id: str) -> dict | None:
 
 
 async def create_session(user_id: str, title: str = DEFAULT_TITLE) -> dict:
+    from src.users import ensure_user_row   # 外键前提：sessions.user_id → users.id
+    await ensure_user_row(user_id)
     sid = uuid.uuid4().hex
     ts = _now()
     await execute(
@@ -73,7 +75,11 @@ async def rename_session(user_id: str, session_id: str, title: str) -> bool:
 
 
 async def delete_session(user_id: str, session_id: str) -> bool:
-    """删除会话（连同其中消息，软业务场景可接受）。不存在 → False。"""
+    """删除会话（连同其中消息，软业务场景可接受）。不存在 → False。
+
+    删库之后**必须失效 L1 缓存**：否则热缓存里那几十条消息会在 TTL 内被喂回来，
+    用户看到"刚删掉的对话又出现了"（失效是删数据动作的一部分，不能交给 TTL）。
+    """
     owned = await get_owned_session(user_id, session_id)
     if not owned:
         return False
@@ -81,6 +87,8 @@ async def delete_session(user_id: str, session_id: str) -> bool:
                   {"uid": user_id, "sid": session_id})
     await execute("DELETE FROM sessions WHERE id = :sid AND user_id = :uid",
                   {"sid": session_id, "uid": user_id})
+    from src.memory import invalidate_cache   # 局部导入：避免 sessions ↔ memory 循环依赖
+    await invalidate_cache(user_id, session_id)
     return True
 
 

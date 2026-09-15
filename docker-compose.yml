@@ -21,10 +21,14 @@ services:
       - TRANSFORMERS_OFFLINE=1
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/study1
       - QDRANT_URL=http://qdrant:6333
+      # L1 热缓存：连不上会 fail-open 降级进程内缓存（不阻塞启动，故不依赖 healthcheck）
+      - REDIS_URL=redis://redis:6379/0
     depends_on:
       postgres:
         condition: service_healthy
       qdrant:
+        condition: service_started
+      redis:
         condition: service_started
     volumes:
       - ./index:/app/index          # BM25 索引（entrypoint 自动生成，落宿主机便于备份）
@@ -67,7 +71,27 @@ services:
       - qdrant_data:/qdrant/storage
     restart: unless-stopped
 
+  redis:
+    # 同时承担两个用途，**运维等级不同**：
+    # - study1:chat:*  热缓存：纯缓存，可丢（丢了回源 PG）
+    # - study1:auth:*  refresh 会话：**不可丢**（丢了等于全员掉线）→ 生产务必开 AOF，
+    #   并考虑与缓存分实例/分库。这里为本地演示开了 appendonly。
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb",
+              "--maxmemory-policy", "noeviction"]
+    ports:
+      - "127.0.0.1:6379:6379"   # 仅本机可连（调试）
+    volumes:
+      - redis_data:/data        # AOF 落盘：会话不可丢；纯缓存部分丢了也无所谓
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
 volumes:
   hf_cache:
   pg_data:
   qdrant_data:
+  redis_data:
