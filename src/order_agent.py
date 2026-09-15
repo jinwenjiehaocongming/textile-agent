@@ -19,6 +19,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import (AIMessage, HumanMessage, SystemMessage,
                                      ToolMessage)
 from src.mcp_client import get_mcp
+from src.order_access import with_trusted_identity
 from src.llm_utils import _safe_llm_async
 from src.render_tools import (
     RENDER_TOOLS, RENDER_TOOL_NAMES, RENDER_PROMPT_HINT,
@@ -123,10 +124,10 @@ ORDER_AGENT_PROMPT = """你是下单助手。根据对话历史处理订单。
 处理命令："""
 
 
-async def _approve_then_create(args: dict, customer_id: str) -> str:
+async def _approve_then_create(args: dict, customer_id: str, session_id: str = "") -> str:
     """
     HITL：create_order 必经人工审批（异步）。
-    1) 组装确认单 draft，登记待审批（approval 注册表）
+    1) 组装确认单 draft，登记待审批（PG 状态机）
     2) interrupt() 挂起图执行，等待审批人 approve/reject
     3) 审批通过 → 真正调用 create_order 写库；拒绝 → 返回取消文案
 
@@ -155,20 +156,36 @@ async def _approve_then_create(args: dict, customer_id: str) -> str:
         "delivery_date": args.get("delivery_date", ""),
     }
 
-    register_pending(customer_id, customer_id, draft)
-    decision = interrupt({"type": "order_approval", "draft": draft})
-    remove_pending(customer_id)
+    # 登记到 PG（不是内存 dict）：重启后管理员仍能看到、还能批、订单照样能生成。
+    # 同时存下 create_order 的**原始入参** —— 图状态丢了的兜底路径要靠它直接写单。
+    # 存进待审批表的 args 也要用**可信身份**覆盖：审批兜底路径会直接拿这份 args 写单，
+    # 存一份带 LLM 自报 customer_id 的副本，等于把越权写单延迟到审批之后发生
+    safe_args = with_trusted_identity("create_order", args, customer_id)
+    pending = await register_pending(customer_id, customer_id, draft,
+                                     args=safe_args, session_id=session_id)
+    decision = interrupt({"type": "order_approval", "draft": draft,
+                          "approval_id": pending.get("id", "")})
 
     approved = bool(decision and decision.get("approved"))
     reason = (decision or {}).get("reason", "")
-    if approved:
-        logger.warning(f"[下单Agent] 审批通过，写入订单: {args.get('product_name')}")
-        return await get_mcp().call_tool("create_order", args)
-    extra = f"（原因：{reason}）" if reason else ""
-    return f"订单未通过人工审批，已取消{extra}。如有疑问请联系销售经理。"
+    try:
+        if approved:
+            logger.warning(f"[下单Agent] 审批通过，写入订单: {args.get('product_name')}")
+            # 带上幂等键（= 审批单 id）：这条路径即便被重放/重试，也只会有一笔订单
+            return await get_mcp().call_tool(
+                "create_order",
+                {**with_trusted_identity("create_order", args, customer_id),
+                 "client_request_id": pending.get("id", "")})
+        extra = f"（原因：{reason}）" if reason else ""
+        return f"订单未通过人工审批，已取消{extra}。如有疑问请联系销售经理。"
+    finally:
+        # 清理 resume 重放时可能新插入的"幽灵待审批"（按 id 精确删，且只删仍 pending 的；
+        # 真正被审批的那行已经是 approved，会作为审计记录保留）
+        await remove_pending(pending.get("id", ""))
 
 
-async def order_agent_node(messages: list, customer_id: str = "guest") -> AIMessage:
+async def order_agent_node(messages: list, customer_id: str = "guest",
+                           session_id: str = "") -> AIMessage:
     """
     下单 Agent（异步）：先查产品确认，再下单。
     工具通过 MCP Client 自动发现。
@@ -227,13 +244,15 @@ async def order_agent_node(messages: list, customer_id: str = "guest") -> AIMess
                     continue
                 if name == "create_order":
                     # HITL：人工审批拦截（interrupt 挂起，审批通过才写库）
-                    result = await _approve_then_create(args, customer_id)
+                    result = await _approve_then_create(args, customer_id, session_id)
                     # 完成信号：工具真实返回成功（LLM 文本不可信，历史订单号会误伤）
                     if "✅ 订单已生成" in str(result):
                         order_completed = True
                     tool_msgs.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
                     continue
-                result = await mcp.call_tool(name, args)
+                # 身份由服务端注入（覆盖 LLM 给的同名参数）：订单号/客户 id 都来自对话，
+                # 直接透传等于让调用者自己声明"我是谁"（详见 src/order_access.py）
+                result = await mcp.call_tool(name, with_trusted_identity(name, args, customer_id))
                 logger.debug(f"[下单Agent] {name} 结果: {str(result)[:100]}...")
                 tool_msgs.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
             conversation.extend(tool_msgs)

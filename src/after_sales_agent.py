@@ -12,6 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from dotenv import load_dotenv
 load_dotenv()
+from src.order_access import with_trusted_identity
 from src.logging_config import get_logger
 logger = get_logger(__name__)
 
@@ -102,8 +103,12 @@ AFTER_SALES_PROMPT = """你是纺织厂的售后服务专员。处理客户的�
 请处理客户的售后需求。"""
 
 
-async def after_sales_node(messages: list) -> AIMessage:
-    """售后 Agent 的对话节点（异步）。工具通过 MCP Client 自动发现。"""
+async def after_sales_node(messages: list, customer_id: str = "") -> AIMessage:
+    """售后 Agent 的对话节点（异步）。工具通过 MCP Client 自动发现。
+
+    ``customer_id``：**鉴权拿到的可信身份**（来自图状态），用于订单归属校验 ——
+    售后工具会查/改指定订单，订单号却是客户在对话里报的，不校验就等于任人操作别人的单。
+    """
     mcp = get_mcp()
 
     llm_with_tools = get_after_sales_llm().bind_tools(
@@ -137,8 +142,9 @@ async def after_sales_node(messages: list) -> AIMessage:
                 if name in RENDER_TOOL_NAMES:
                     tool_msgs.append(ToolMessage(content="", tool_call_id=tc["id"]))
                     continue
-                result = await mcp.call_tool(name, args)
-                logger.info(f"[售后] {name}({args})")
+                # 身份注入（覆盖 LLM 参数）：见 src/order_access.py
+                result = await mcp.call_tool(name, with_trusted_identity(name, args, customer_id))
+                logger.info(f"[售后] {name}({args}) by {customer_id or '(未认证)'}")
                 tool_msgs.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
             conversation.extend(tool_msgs)
 

@@ -25,8 +25,9 @@ async def test_create_order_writes_db(pg_db):
 
 
 async def test_query_order_not_found(pg_db):
-    result = await query_order_status("ORD-不存在")
-    assert "未找到订单" in result
+    """查不到与不属于自己返回**同一句话**（不泄露订单是否存在）。"""
+    result = await query_order_status("ORD-不存在", caller_id="c1")
+    assert "未找到该订单" in result
 
 
 async def test_query_order_roundtrip(pg_db):
@@ -38,13 +39,32 @@ async def test_query_order_roundtrip(pg_db):
     from src.db import query_one
     row = await query_one("SELECT order_no FROM orders ORDER BY id DESC LIMIT 1")
     assert row, "订单应已写入 PG"
-    result = await query_order_status(row["order_no"])
+    # 2026-09：订单级工具必须带可信身份 caller_id（服务端注入），
+    # 否则 fail-closed —— 身份只写在提示词里时，任何客户都能查别人的单
+    result = await query_order_status(row["order_no"], caller_id="1")
     assert "T400" in result
+    # 别人的单：同一句话，查不出内容
+    assert "不属于您" in await query_order_status(row["order_no"], caller_id="2")
+    # 没身份：直接拒绝（fail-closed）
+    assert "无法确认您的身份" in await query_order_status(row["order_no"])
 
 
 async def test_create_refund(pg_db):
-    result = await create_refund(order_no="ORD-20260101-00000000000000001234", reason="纬斜超标")
+    """退款必须先存在订单（2026-09 加了 refunds.order_no → orders 外键，
+    "退款挂在不存在的订单上"从"没人管"变成"数据库拒绝"）。"""
+    from src.db import execute
+    await execute("INSERT INTO users (id, username, password_hash, display_name, role, status, created_at) "
+                  "VALUES ('c_rf', 'c_rf', '', '退款客户', 'customer', 'active', '2026-01-01T00:00:00')")
+    await execute("INSERT INTO orders (order_no, customer_id, product_id, product_name, color, quantity, "
+                  "unit_price, total, status, created_at) VALUES "
+                  "('ORD-20260101-00000000000000001234', 'c_rf', 'P001', 'T400 复合弹力布', '黑色', "
+                  "100, 13.0, 1300.0, '已发货', '2026-01-01T00:00:00')")
+    result = await create_refund(order_no="ORD-20260101-00000000000000001234", reason="纬斜超标",
+                                 caller_id="c_rf")
     assert "✅ 退款工单已生成" in result
+    # 同一张单换个身份来退 → 这工具改了之后会拒绝（改之前谁的工单都能建）
+    assert "不属于您" in await create_refund(
+        "ORD-20260101-00000000000000001234", "替别人退款", caller_id="attacker")
     from src.db import query_one
     row = await query_one("SELECT * FROM refunds ORDER BY id DESC LIMIT 1")
     assert row and row["status"] == "待审核"

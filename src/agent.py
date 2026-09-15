@@ -87,6 +87,22 @@ def get_cheap_llm() -> ChatOpenAI:
     return _cheap_llm
 
 
+_analytics_llm = None
+
+
+def get_analytics_llm() -> ChatOpenAI:
+    """数据分析 Agent 专用 LLM（懒加载）。
+
+    为什么不复用 get_cheap_llm()：那个是给"改写查询/意图路由"这类**短 prompt** 调的，
+    timeout 只有 15 秒；而分析链路的 prompt 带着完整语义层 + 证据 + 要求写 150-300 字结论，
+    实测会直接 APITimeoutError。分析还要 5 次调用/请求，超时给宽一点更稳。
+    """
+    global _analytics_llm
+    if _analytics_llm is None:
+        _analytics_llm = _make_llm(temperature=0.2, timeout=int(os.getenv("ANALYTICS_LLM_TIMEOUT", "90")))
+    return _analytics_llm
+
+
 def __getattr__(name: str):
     # 兼容外部 `from src.agent import cheap_llm` / `src.agent.llm` 的属性访问
     if name == "llm":
@@ -167,6 +183,7 @@ class AgentState(TypedDict):
     query_type: str
     user_id: str
     user_context: str
+    session_id: str          # 多会话：审批挂起时要记住是哪个会话（2026-09）
 
 
 # ============================================================
@@ -322,7 +339,9 @@ async def tool_executor(state: AgentState) -> dict:
             results.append(ToolMessage(content="", tool_call_id=tc["id"]))
             continue
         logger.info(f"[工具] {name}({args})")
-        result = await get_mcp().call_tool(name, args)
+        # 身份注入：这里同样可能被调度到订单级工具（见 src/order_access.py）
+        result = await get_mcp().call_tool(
+            name, with_trusted_identity(name, args, state.get("user_id", "")))
         logger.debug(f"[工具] {name} 结果: {result[:120]}")
         results.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
     return {"messages": state["messages"] + results}
@@ -482,7 +501,8 @@ def _is_order_completed(text: str) -> bool:
 
 async def order_agent_node(state: AgentState) -> dict:
     logger.info("[下单Agent] 处理订单...")
-    reply = await order_agent(state["messages"], customer_id=state.get("user_id", "guest"))
+    reply = await order_agent(state["messages"], customer_id=state.get("user_id", "guest"),
+                              session_id=state.get("session_id", ""))
     result = {"messages": state["messages"] + [reply]}
     # 完成判定以工具结果标记为准（order_agent 内 create_order 真实成功后挂载），
     # 不再扫描 LLM 回复文本 —— 回复复述历史订单号会误判完成、把 query_type 重置为 chat。
@@ -493,7 +513,7 @@ async def order_agent_node(state: AgentState) -> dict:
 
 async def after_sales_agent_node(state: AgentState) -> dict:
     logger.info("[售后Agent] 处理售后...")
-    reply = await after_sales_node(state["messages"])
+    reply = await after_sales_node(state["messages"], customer_id=state.get("user_id", ""))
     result = {"messages": state["messages"] + [reply]}
     if hasattr(reply, "content") and "退款工单已生成" in str(reply.content):
         result["query_type"] = "chat"

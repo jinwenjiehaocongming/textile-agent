@@ -17,11 +17,20 @@ mcp = FastMCP("order-server")
 
 
 @mcp.tool()
-async def query_order_status(order_no: str) -> str:
-    """查询订单状态。客户提供了订单号（ORD- 开头）时使用。"""
-    row = await query_one("SELECT * FROM orders WHERE order_no = :order_no", {"order_no": order_no})
+async def query_order_status(order_no: str, caller_id: str = "") -> str:
+    """查询订单状态。客户提供了订单号（ORD- 开头）时使用。
+
+    ⚠️ `caller_id` 由服务端注入（`src/order_access.py`）：订单号来自对话，
+    任何人都可能报出**别人的**订单号，所以归属校验必须在查询条件里，
+    而不是靠提示词里那句"只能查自己的订单"。
+    """
+    if not caller_id:
+        return "无法确认您的身份，请重新登录后再试。"
+    row = await query_one(
+        "SELECT * FROM orders WHERE order_no = :order_no AND customer_id = :cid",
+        {"order_no": order_no, "cid": caller_id})
     if not row:
-        return f"未找到订单 {order_no}"
+        return "未找到该订单，或该订单不属于您。请核对订单号（ORD- 开头）后重试。"
     return (
         f"订单号：{row['order_no']}\n"
         f"产品：{row['product_name']} | {row['color']}\n"
@@ -42,8 +51,30 @@ async def create_order(
     phone: str = "",
     address: str = "",
     delivery_date: str = "",
+    client_request_id: str = "",
 ) -> str:
-    """为客户创建面料采购订单。仅在客户明确确认下单后调用。"""
+    """为客户创建面料采购订单。仅在客户明确确认下单后调用。
+
+    ``client_request_id``：**幂等键**（人工审批传的是 pending_approvals.id）。
+    审批兜底路径可能重试（进程在"写单"与"记账"之间挂掉、网络重发），带上它就能
+    保证"同一次审批最多生成一笔订单"——重复调用直接返回已生成的那笔。
+    """
+    def _existing_reply(row: dict, why: str) -> str:
+        return (f"✅ 订单已生成！\n订单号：{row['order_no']}\n"
+                f"总价：¥{row['total']}（{why}，已返回原订单，未重复下单）")
+
+    # 外键前提：orders.customer_id → users.id（下单必须登录，但 mock/影子身份也可能走到这）
+    from src.users import ensure_user_row
+    await ensure_user_row(customer_id)
+
+    if client_request_id:                      # 幂等：先查有没有下过
+        hit = await query_one(
+            "SELECT order_no, total FROM orders WHERE client_request_id = :rid",
+            {"rid": client_request_id})
+        if hit:
+            _logger.info("create_order 幂等命中：%s → %s", client_request_id, hit["order_no"])
+            return _existing_reply(hit, "同一请求重复提交")
+
     now = datetime.now()
     # 订单号 = 日期 + 时分秒 + 微秒(6位) + 随机(4位)：并发同一秒多单不撞 UNIQUE
     order_no = (f"ORD-{now.strftime('%Y%m%d')}-"
@@ -54,19 +85,27 @@ async def create_order(
         await execute(
             """INSERT INTO orders (order_no, customer_id, product_id, product_name, color,
                                    quantity, unit_price, total, status, created_at,
-                                   phone, address, delivery_date)
+                                   phone, address, delivery_date, client_request_id)
                VALUES (:order_no, :customer_id, :product_id, :product_name, :color,
                        :quantity, :unit_price, :total, '待付款', :created_at,
-                       :phone, :address, :delivery_date)""",
+                       :phone, :address, :delivery_date, :rid)""",
             {
                 "order_no": order_no, "customer_id": customer_id,
                 "product_id": product_id, "product_name": product_name, "color": color,
                 "quantity": quantity, "unit_price": unit_price, "total": total,
                 "created_at": now.isoformat(),
                 "phone": phone, "address": address, "delivery_date": delivery_date,
+                "rid": client_request_id or None,
             },
         )
     except Exception as e:  # noqa: BLE001
+        # 唯一索引撞了 = 并发下同一请求被写了两次 → 回查返回已有订单（依然幂等）
+        if client_request_id:
+            hit = await query_one(
+                "SELECT order_no, total FROM orders WHERE client_request_id = :rid",
+                {"rid": client_request_id})
+            if hit:
+                return _existing_reply(hit, "并发重复提交")
         _logger.exception("create_order 失败: %s", str(e)[:200])
         return "订单生成失败，请稍后重试。您的需求已记录，销售同事会尽快联系您。"
 
