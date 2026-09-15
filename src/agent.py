@@ -46,6 +46,7 @@ from src.order_agent import order_agent_node as order_agent
 from src.after_sales_agent import after_sales_node
 from src.memory import get_user
 from src.mcp_client import init_mcp, get_mcp
+from src.order_access import with_trusted_identity
 from src.render_tools import RENDER_TOOLS, RENDER_TOOL_NAMES, RENDER_PROMPT_HINT
 
 load_dotenv()
