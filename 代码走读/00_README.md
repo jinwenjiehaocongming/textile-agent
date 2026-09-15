@@ -8,7 +8,8 @@
 
 ## 一、阅读方法（先读这个）
 
-1. **顺序读**：从 01 到 18，编号即学习顺序，每一步都建立在上一步之上。
+1. **顺序读**：从 01 到 19，编号即学习顺序，每一步都建立在上一步之上
+   （19 是独立模块，可以单独读，但它复用前面所有基建：MCP 工具层、SSE、鉴权、审计）。
 2. **每步结构固定**：
    - `先建立心智模型` —— 这一节在讲什么、和别处什么关系（表格）
    - `逐段拆解` —— 挑真正的代码逐行翻译成人话，每个"黑话"都给解释
@@ -23,7 +24,7 @@
    - 仓库自带文档：`README.md`（概览）、`ARCHITECTURE.md`、`docs/UNDERSTANDING.md`（架构从零讲解）、
      `docs/LEARNING.md`（上线改造复盘）、`WEB_UI_STREAMING.md`（流式设计旧版）、`EVALUATION.md`。
 
-## 二、全 18 步目录地图
+## 二、全 19 步目录地图
 
 | 编号 | 文件 | 覆盖 | 关键代码 |
 |----|------|------|---------|
@@ -46,6 +47,8 @@
 | 16 | Docker 部署与 CI | 镜像、compose、entrypoint、健康检查、流水线 | `Dockerfile` `docker-compose.yml` `ci.yml` |
 | 17 | Git 演进复盘 | 从 SQLite/Chroma 到 PG/Qdrant 的每一步动机 | `git log` |
 | 18 | 高频追问与坑清单 | 面试官会追问的点和诚实的工程取舍 | 汇总 |
+| 19 | 管理员数据分析 Agent | 自然语言 → 只读 SQL（四层防护）→ 结论（防编造）→ 图表；评测与口径 | `src/analytics/*` `AnalyticsPanel.jsx` |
+| 20 | 管理端工作台 | 订单状态机、退款审核 CAS、按角色分界面（管理导航 / 客户视角） | `src/admin_orders.py` `AdminDashboard.jsx` `OrderManager.jsx` `RefundPanel.jsx` |
 
 ## 三、一页速览：整个系统在干什么（背熟这个）
 

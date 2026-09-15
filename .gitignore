@@ -37,3 +37,11 @@ MCP_MIGRATION_GUIDE.md
 
 # 部署用临时打包文件
 *.zip
+
+# ── 2026-09：测试/脚本产生的状态与备份（每次跑测试都会变，不该进版本库）──
+# Qdrant LocalMode 的存储文件：跑一次测试就变，二进制还会在合并时冲突
+index/qdrant_storage/
+# 数据治理时导出的原始行快照（含用户/订单数据，只留本地备查）
+data/orphans_backup_*.json
+# 浏览器自动化（CDP 截图/用户目录）临时产物
+.cdp*/
