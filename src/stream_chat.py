@@ -40,6 +40,7 @@ async def build_input_state(req_message: str, memory, user_id: str, session_id: 
         "query_type": last_type,
         "user_id": user_id,
         "user_context": user_context,
+        "session_id": session_id,
     }
 
 
@@ -75,6 +76,14 @@ async def stream_chat(
 
     try:
         # ── 挂起态守卫：该用户有订单在待审批 → 不再跑图，直接提示 ──
+        # 2026-09：**先查 PG**（重启后 checkpoint 没了也要拦得住），图状态只作二次确认。
+        # 旧实现把 DB 检查挂在 `snap0.next` 里面 —— 重启后 next 为空，守卫等于失效。
+        from src.approval import get_pending as _get_pending
+        row0 = await _get_pending(user_id)
+        if row0:
+            yield {"type": "pending", "content": pending_reply_text(row0["draft"]),
+                   "data": {"draft": row0["draft"], "approval_id": row0["id"]}}
+            return
         snap0 = await graph.aget_state(config)
         if snap0 and snap0.next:
             draft = find_pending_draft(snap0.interrupts)
@@ -129,11 +138,13 @@ async def stream_chat(
                         await _touch(session_id, memory.user_id, req_message)
                         await memory.save_last_query_type("chat")
                         from src.approval import set_pending_session
-                        set_pending_session(user_id, session_id)
+                        await set_pending_session(user_id, session_id)
+                        from src.approval import find_approval_id
                         yield {
                             "type": "pending",
                             "content": reply,
-                            "data": {"type": "order", "data": draft},
+                            "data": {"type": "order", "data": draft,
+                                     "approval_id": find_approval_id(ev["__interrupt__"])},
                         }
                     break
                 for node, update in (ev or {}).items():
