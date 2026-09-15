@@ -62,25 +62,30 @@ def test_token_expired():
 
 
 # ── /dev/login：mock 身份签发 ────────────────────────────────
+# 2026-09：登录改成"access + refresh"，refresh 要落 Redis → 这些用例依赖 auth_store
+# （没有 Redis 的环境跳过：fail-closed 是设计，不是 bug）
 
-def test_dev_login_admin():
+def test_dev_login_admin(auth_store):
     r = client.post("/dev/login", json={"role": "admin"})
     assert r.status_code == 200
     body = r.json()
     assert body["role"] == "admin"
     assert body["user_id"] == "dev_admin"
-    assert decode_token(body["token"])["role"] == "admin"
+    assert decode_token(body["access_token"])["role"] == "admin"
 
 
-def test_dev_login_customer_default():
+def test_dev_login_customer_default(auth_store):
     r = client.post("/dev/login", json={"role": "customer", "user_id": "u_test_001"})
     assert r.status_code == 200
     body = r.json()
     assert body["role"] == "customer"
     assert body["user_id"] == "u_test_001"
+    # 双凭证：access 能验签；refresh 是 Redis 里的会话串
+    assert decode_token(body["access_token"])["user_id"] == "u_test_001"
+    assert body["refresh_token"].startswith(body["sid"] + ".")
 
 
-def test_dev_login_invalid_role_defaults_to_customer():
+def test_dev_login_invalid_role_defaults_to_customer(auth_store):
     r = client.post("/dev/login", json={"role": "hacker"})
     assert r.status_code == 200
     assert r.json()["role"] == "customer"

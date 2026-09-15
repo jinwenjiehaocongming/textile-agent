@@ -22,6 +22,16 @@ TEST_DATABASE_URL = os.environ.get(
 )
 os.environ.setdefault("DATABASE_URL", TEST_DATABASE_URL)
 
+# 分析层（src/analytics/sql.py）用的是 ANALYTICS_DATABASE_URL（生产=只读角色 DSN）。
+# 测试必须把它也指到**测试库**，否则会连到开发库跑断言（真实踩过：加了 .env 变量后
+# 分析测试开始查开发库，断言全空）。保持角色不变、只换库名，这样测试也覆盖权限模型。
+_analytics_dsn = os.environ.get("ANALYTICS_DATABASE_URL", "")
+if _analytics_dsn:
+    _test_db = TEST_DATABASE_URL.rsplit("/", 1)[-1]
+    os.environ["ANALYTICS_DATABASE_URL"] = _analytics_dsn.rsplit("/", 1)[0] + "/" + _test_db
+else:
+    os.environ["ANALYTICS_DATABASE_URL"] = TEST_DATABASE_URL
+
 PROJECT_ROOT = Path(__file__).parent.parent
 
 # 种子产品（与真实库风格一致）
@@ -73,6 +83,84 @@ async def _reset_db_engine():
     await dispose_engine()
     yield
     await dispose_engine()
+
+
+@pytest.fixture(autouse=True)
+async def _reset_l1_cache():
+    """每个测试前后清空 L1 热缓存（Redis + 进程内 LRU）。
+
+    ``reset_schema`` 只清 PG；若不一起清缓存，上一个用例/上一轮运行的缓存
+    就成了"第二个真相来源" —— 表现为 ``test_user_isolation`` 这类用例
+    在缓存热的时候随机失败（旧代码实测复现过）。
+    """
+    from src.analytics.graph import reset_semantics_cache
+    from src.memory import reset_cache
+    from src.users import reset_user_cache
+    reset_user_cache()          # 影子账号缓存也要清（表被重建后缓存会失真）
+    reset_semantics_cache()     # 语义层里的外键关系缓存同理
+    await reset_cache()
+    yield
+    await reset_cache()
+
+
+@pytest.fixture(scope="session")
+def auth_store():
+    """鉴权会话存储（Redis）必须可用，否则跳过相关用例。
+
+    登录/刷新是 **fail-closed** 的（Redis 挂了就 503，绝不放行），所以"没有 Redis"
+    的环境下这些用例必然失败 —— 那是设计，不是 bug。本地：``brew install redis``
+    或 ``docker compose up redis``；CI 里由 services.redis 提供。
+    """
+    import asyncio
+    from src import auth_sessions
+    if not asyncio.run(auth_sessions.ping()):
+        pytest.skip("鉴权会话需要 Redis（本机未启动 / REDIS_ENABLED=0）")
+    return True
+
+
+@pytest.fixture
+async def clean_auth_store(auth_store):
+    """每个用例前后清空 auth 命名空间（``study1:auth:*``），避免会话跨用例串台。"""
+    from src import auth_sessions, redis_client
+
+    async def _flush():
+        client = redis_client.get_client()
+        if client is None:
+            return
+        try:
+            async for key in client.scan_iter(match=f"{auth_sessions.AUTH_PREFIX}:auth:*", count=200):
+                await client.delete(key)
+        except Exception:  # noqa: BLE001  （fail-closed 用例会把 Redis 指向死端口）
+            pass
+
+    await _flush()
+    yield
+    await _flush()
+
+
+@pytest.fixture(autouse=True)
+async def _reset_rate_limits():
+    """每个用例前后清空限流桶（``study1:rl:*``）并清进程内版本缓存。
+
+    限流是**跨用例共享状态**（按 IP 计数）：不清理的话，前面用例攒下的登录失败次数
+    会把后面的用例判成"账号已锁定"，出现"单独跑绿、整跑红"的经典假故障。
+    """
+    from src import auth_sessions, rate_limit
+    await rate_limit.clear_all()
+    auth_sessions.reset_version_cache()
+    yield
+    await rate_limit.clear_all()
+    auth_sessions.reset_version_cache()
+
+
+@pytest.fixture(autouse=True)
+async def _reset_analytics_engine():
+    """每个用例前后释放分析层 engine —— 原因同 db engine：连接池绑定事件循环，
+    而 pytest-asyncio 每个用例一个新 loop，不释放会跨 loop 报错。"""
+    from src.analytics import sql as analytics_sql
+    await analytics_sql.dispose_engine()
+    yield
+    await analytics_sql.dispose_engine()
 
 
 @pytest.fixture

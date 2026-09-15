@@ -69,7 +69,7 @@ async def test_place_order_long_sentence_not_shortcut(monkeypatch):
 
 async def test_order_node_completed_flag_sets_chat(monkeypatch):
     """create_order 真实成功（标记挂载）→ query_type 切回售前。"""
-    async def fake_order_agent(messages, customer_id):
+    async def fake_order_agent(messages, customer_id, session_id=""):
         msg = AIMessage(content="✅ 订单已生成！\n订单号：ORD-20260824-1658089312341234")
         msg.additional_kwargs = {"order_completed": True}
         return msg
@@ -82,7 +82,7 @@ async def test_order_node_completed_flag_sets_chat(monkeypatch):
 async def test_order_node_real_order_no_in_text_keeps_place_order(monkeypatch):
     """LLM 回复复述历史中的真实订单号（但本轮未真实下单、无标记）
     → query_type 不得被重置（修复前会被 _is_order_completed 误判为完成）。"""
-    async def fake_order_agent(messages, customer_id):
+    async def fake_order_agent(messages, customer_id, session_id=""):
         return AIMessage(content="为您查到 T400 黑色，另外您之前的订单 ORD-20260824-1658089312341234 已付款。")
     monkeypatch.setattr("src.agent.order_agent", fake_order_agent)
     state = {"messages": [HumanMessage(content="T400 黑色 3000米 帮我下单")], "query_type": "place_order", "user_id": "t"}
@@ -92,7 +92,7 @@ async def test_order_node_real_order_no_in_text_keeps_place_order(monkeypatch):
 
 async def test_order_node_no_flag_keeps_place_order(monkeypatch):
     """仅展示产品/确认单（无 create_order）→ 保持下单流程。"""
-    async def fake_order_agent(messages, customer_id):
+    async def fake_order_agent(messages, customer_id, session_id=""):
         return AIMessage(content="📋 订单确认单\n请确认以上信息是否正确？回复「确认」即可下单。")
     monkeypatch.setattr("src.agent.order_agent", fake_order_agent)
     state = {"messages": [HumanMessage(content="可以")], "query_type": "place_order", "user_id": "t"}

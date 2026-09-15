@@ -3,6 +3,11 @@
 - 会话 CRUD：新建/列表/改名/删除
 - 行级隔离：他人会话 → 404（不能跨用户读）
 - 订单接口：本用户可见、空订单 200
+
+**注意**：这里刻意**不走 /auth/register** 拿 token —— 注册登录依赖 Redis 会话存储
+（fail-closed），会让"聊天会话"的测试被鉴权基础设施耦合：没 Redis 的环境就得整片跳过。
+本文件测的是会话/订单/授权边界，所以直接建账号 + 签 access token（`_make_user`），
+登录流程本身由 test_accounts.py / test_auth_refresh.py 覆盖。
 """
 import os
 
@@ -20,11 +25,12 @@ async def _api() -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
 
 
-async def _register(c: httpx.AsyncClient, username: str) -> str:
-    r = await c.post("/auth/register", json={
-        "username": username, "password": "pass123456"})
-    assert r.status_code == 200
-    return r.json()["token"]
+async def _make_user(username: str, role: str = "customer") -> dict:
+    """建账号 + 签 access token（跳过登录流程，不依赖 Redis 会话存储）。"""
+    from src.auth import create_token
+    from src.users import create_user
+    pub = await create_user(username, "pass123456", "")
+    return {**pub, "token": create_token(pub["user_id"], role=role)}
 
 
 @pytest.fixture(autouse=True)
@@ -35,7 +41,7 @@ async def _clean():
 
 async def test_session_crud_flow():
     async with await _api() as c:
-        tok = await _register(c, "alice")
+        tok = (await _make_user("alice"))["token"]
         h = {"Authorization": f"Bearer {tok}"}
 
         # 初始为空
@@ -64,8 +70,8 @@ async def test_session_crud_flow():
 
 async def test_session_ownership_isolation():
     async with await _api() as c:
-        tok_a = await _register(c, "alice")
-        tok_b = await _register(c, "bob")
+        tok_a = (await _make_user("alice"))["token"]
+        tok_b = (await _make_user("bob"))["token"]
         h_a = {"Authorization": f"Bearer {tok_a}"}
         h_b = {"Authorization": f"Bearer {tok_b}"}
 
@@ -83,22 +89,21 @@ async def test_session_ownership_isolation():
 
 async def test_orders_empty_and_isolated():
     async with await _api() as c:
-        tok = await _register(c, "carol")
+        tok = (await _make_user("carol"))["token"]
         h = {"Authorization": f"Bearer {tok}"}
         r = await c.get("/orders", headers=h)
         assert r.status_code == 200
         assert r.json()["orders"] == []
+
+
 async def test_admin_users_endpoint_role_gate():
     """用户列表：仅管理员可看（200），普通客户 403；响应不含 password_hash。"""
     from src.auth import create_token
-    from src.users import get_user_by_id
 
     async with await _api() as c:
-        # 两个普通注册用户（customer）
-        reg_c = (await c.post("/auth/register", json={
-            "username": "userlist_c", "password": "pass123456"})).json()
-        reg_a = (await c.post("/auth/register", json={
-            "username": "userlist_a", "password": "pass123456"})).json()
+        # 两个普通账号（customer）
+        reg_c = await _make_user("userlist_c")
+        reg_a = await _make_user("userlist_a")
 
         tok_c = reg_c["token"]                                  # customer token
         tok_a = create_token(reg_a["user_id"], role="admin")    # admin token（同账号）

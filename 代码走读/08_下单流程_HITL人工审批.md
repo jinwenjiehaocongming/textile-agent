@@ -130,7 +130,11 @@ _pending: dict[str, dict] = {}          # approval.py:18-19
 ```
 
 **以 thread_id（= user_id）为键**；模块注释（approval.py:8-10）自认"进程内存储（与
-MemorySaver 一致）：生产环境换 Redis/DB 即可，接口保持不变"。
+MemorySaver 一致）"）。**2026-09 已改**：注册表迁到 PG 表 `pending_approvals`，
+因为"进程内 + 图 resume 才写单"这套组合的失败代价是**丢客户订单且无痕迹** ——
+一次发版/重启，客户已收到"已提交人工审批"，管理员列表却空了，订单永远不生成，
+且没有异常、没有日志、没有审计行。现在表是业务真相来源：列表/状态机/CAS 抢占/
+超时/审计/幂等全以它为准，图 checkpoint 只决定"客户续轮上下文还在不在"。
 
 | 函数 | 干什么 | 行号 |
 |---|---|---|
@@ -367,8 +371,12 @@ except 会兜成"系统异常"，app.py:140-143），更危险的是新消息可
 `ainvoke` 撞 interrupt 时，图状态被 checkpointer 持久化；`aget_state` 能读回、
 `Command(resume=...)` 能续跑，全靠它。但本项目 checkpointer 是 **MemorySaver（进程内
 内存）**，approval 注册表也是**进程内 dict**（approval.py 注释自认"与 MemorySaver 一致，
-生产换 Redis/DB 即可"）——**服务一重启，挂起的单和公示栏一起消失**，客户永远等不到审批；
-生产要换 LangGraph 官方 PG checkpointer + Redis 注册表才能跨重启存活。主动说出
+**已修（2026-09 方案 B）**：注册表迁 PG（`pending_approvals`），审批走
+"CAS 抢占 → 优先图 resume → 兜底直接写单"，**重启后不再丢单**；成功标准也从
+"图没抛异常"改成"真拿到订单号"（避免静默假成功）。更彻底的做法是再换官方
+PG checkpointer 补上续轮上下文，代价见清单（`langgraph-checkpoint-postgres` 会把
+`langgraph-checkpoint` 顶到 4.x，与 `langgraph 0.6.11` 的 `<4.0.0` 冲突，需降级到
+2.0.21 + 2.1.2 并全量回归）。要说清
 "重启即丢 + 怎么修"是加分项。
 
 **Q4：为什么客户不能 approve 自己挂起的单？审批权限到底怎么控的？**

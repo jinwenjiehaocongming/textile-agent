@@ -4,6 +4,9 @@
 - 登录：成功签发 token、密码错/用户不存在统一 401（不泄露账号存在性）
 - 安全：password_hash 绝不下发；注册接口不接受 role 越权
 """
+# 说明：/auth/register 与 /auth/login 现在会建 Redis 会话（发 refresh token），
+# 且鉴权是 fail-closed 的 —— 因此这些"登录流程"用例带 auth_store 夹具，
+# 没有 Redis 的环境会 skip 而不是 fail（那是设计，不是 bug）。
 import os
 
 os.environ["DEV_MODE"] = "1"
@@ -41,7 +44,7 @@ async def test_auth_user_unknown_returns_none():
     assert await auth_user("nobody", "whatever1") is None
 
 
-async def test_register_and_login_flow():
+async def test_register_and_login_flow(auth_store):
     async with await _api() as c:
         r = await c.post("/auth/register", json={
             "username": "Alice", "password": "pass123456", "display_name": "爱丽丝"})
@@ -79,7 +82,7 @@ async def test_register_and_login_flow():
         assert nope.status_code == 401
 
 
-async def test_register_role_ignored():
+async def test_register_role_ignored(auth_store):
     """注册接口不接受 role 字段：越权注册 admin 被忽略，永远是 customer。"""
     async with await _api() as c:
         r = await c.post("/auth/register", json={
@@ -88,7 +91,7 @@ async def test_register_role_ignored():
         assert r.json()["role"] == "customer"
 
 
-async def test_register_validation():
+async def test_register_validation(auth_store):
     async with await _api() as c:
         assert (await c.post("/auth/register", json={
             "username": "u1", "password": "123"})).status_code == 400      # 弱密码
@@ -98,7 +101,7 @@ async def test_register_validation():
             "username": "ok_user", "password": "12345678"})).status_code == 200
 
 
-async def test_never_return_password_fields():
+async def test_never_return_password_fields(auth_store):
     async with await _api() as c:
         r = await c.post("/auth/register", json={
             "username": "safe", "password": "pass123456"})
