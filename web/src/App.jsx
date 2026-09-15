@@ -1,9 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 import {
-  streamChat, fetchHistory, fetchMe, logout,
+  AUTH_EXPIRED_EVENT, clearSession, streamChat, fetchHistory, fetchMe, logout,
   fetchSessions, createSession, deleteSession, uuid,
 } from './api'
 import LoginPage from './components/LoginPage'
+import ChangePasswordModal from './components/ChangePasswordModal'
+// 懒加载：ECharts 体积大（~570KB），只有管理员打开分析视图时才拉这个 chunk，
+// 不能让客服对话首页为它买单
+const AnalyticsPanel = lazy(() => import('./components/AnalyticsPanel'))
+// 管理端表格页也懒加载：客户永远不会打开它们，不该进客户的 bundle
+const AdminDashboard = lazy(() => import('./components/AdminDashboard'))
+const OrderManager = lazy(() => import('./components/OrderManager'))
+const RefundPanel = lazy(() => import('./components/RefundPanel'))
 import { MessageBubble } from './components/MessageBubble'
 import { TypingIndicator } from './components/TypingIndicator'
 import ApprovalPanel from './components/ApprovalPanel'
@@ -49,11 +57,49 @@ function fmtAgo(iso) {
 }
 
 const VIEW_META = {
+  // 管理端（看的是"业务"，不是"下单"）
+  dashboard: { title: '经营工作台', sub: '待处理事项 · 经营概况' },
+  adminOrders: { title: '订单管理', sub: '全站订单 · 状态流转' },
+  refunds: { title: '退款审核', sub: '退款工单 · 通过 / 驳回' },
+  // 客户端
   chat: { title: 'AI 客服助手', sub: '纺织产品 · 下单 · 售后' },
   orders: { title: '我的订单', sub: '历史下单记录 · 状态跟踪' },
+  // 共用
   approval: { title: '订单审批', sub: '待人工确认的下单请求' },
   users: { title: '用户管理', sub: '已注册账号一览' },
+  analytics: { title: '数据分析', sub: '一句话问业务 · 只读 SQL · 图表与结论' },
 }
+
+// 管理员的默认落地页：管理端不需要"下单/聊天"，需要的是"今天该处理什么"
+const ADMIN_HOME = 'dashboard'
+
+/** 管理端侧栏菜单：顺序 = 使用频率（工作台 → 订单 → 售后 → 审批 → 人 → 数据）。 */
+const ADMIN_NAV = [
+  {
+    view: 'dashboard', label: '工作台', hint: '待处理 · 经营概况',
+    icon: <><path d="M3 13h8V3H3zM13 21h8v-8h-8zM13 3v6h8V3zM3 21h8v-6H3z" /></>,
+  },
+  {
+    view: 'adminOrders', label: '订单管理', hint: '全站订单 · 状态流转',
+    icon: <><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></>,
+  },
+  {
+    view: 'refunds', label: '退款审核', hint: '退款工单 · 通过 / 驳回',
+    icon: <><path d="M9 14 4 9l5-5" /><path d="M4 9h11a6 6 0 0 1 0 12h-3" /></>,
+  },
+  {
+    view: 'approval', label: '订单审批', hint: '待人工确认的下单',
+    icon: <path d="M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />,
+  },
+  {
+    view: 'users', label: '用户管理', hint: '账号 · 状态',
+    icon: <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />,
+  },
+  {
+    view: 'analytics', label: '数据分析', hint: '只读 SQL · 图表结论',
+    icon: <><path d="M3 3v18h18" /><path d="M7 15l3-4 3 3 4-6" /></>,
+  },
+]
 
 export default function App() {
   // ── 会话门禁（2026-09）：无 token/失效 → /me 401 → 登录页 ──
@@ -70,31 +116,32 @@ export default function App() {
   const [streaming, setStreaming] = useState(false)
   const [error, setError] = useState('')
   const [steps, setSteps] = useState([]) // 图节点执行过程（节点流式）
-  const [view, setView] = useState('chat') // chat | orders | approval(仅 admin)
+  const [view, setView] = useState('chat') // chat | orders | dashboard | adminOrders | refunds | approval | users | analytics
+  // 跳转时携带的筛选条件（如工作台点"待发货" → 订单管理默认筛已付款）。
+  // 用 navSeq 递增做 key，保证"已在订单页 → 再点另一个筛选"也会重新挂载并生效。
+  const [viewParams, setViewParams] = useState({})
+  const [navSeq, setNavSeq] = useState(0)
+  const [showPassword, setShowPassword] = useState(false) // 修改密码弹窗
   const messagesEndRef = useRef(null)
   const typeTimerRef = useRef(null)
 
-  // 启动：探测登录态（fetchMe 401 → null → 登录页）
+  // 启动：探测登录态（access 过期但有 refresh → api 层静默换新，用户无感；
+  // 彻底失效 → fetchMe 返回 null → 登录页）
   useEffect(() => {
     fetchMe()
-      .then((u) => setUser(u))
+      .then((u) => {
+        setUser(u)
+        // 管理员登录后不该先看到"客服对话"，而是工作台
+        if (u?.role === 'admin') setView(ADMIN_HOME)
+      })
       .catch(() => setUser(null))
       .finally(() => setBooting(false))
   }, [])
 
-  // 登录成功（LoginPage 回调）
-  const handleAuthed = useCallback((u) => {
-    setUser(u)
-    setView('chat')
-    setMessages([])
-    setSteps([])
-    setError('')
-  }, [])
-
-  // 退出登录：清 token → 回登录页（服务端无状态，无需调接口）
-  const handleLogout = useCallback(() => {
-    logout()
+  // 本地状态复位（主动登出 / 凭证失效共用）
+  const resetLocalState = useCallback(() => {
     clearInterval(typeTimerRef.current)
+    setShowPassword(false)
     setUser(null)
     setSessions([])
     setSessionId('')
@@ -105,6 +152,32 @@ export default function App() {
     setError('')
     setInput('')
   }, [])
+
+  // 登录成功（LoginPage 回调）
+  const handleAuthed = useCallback((u) => {
+    setUser(u)
+    setView(u?.role === 'admin' ? ADMIN_HOME : 'chat')
+    setMessages([])
+    setSteps([])
+    setError('')
+  }, [])
+
+  // 退出登录：**先撤销服务端会话再清本地**（api.logout 内部已顺序处理）。
+  // 服务端撤销那一半不能省：否则被拷走的 refresh 在空闲期内仍是活凭证。
+  const handleLogout = useCallback(async () => {
+    await logout()
+    resetLocalState()
+  }, [resetLocalState])
+
+  // 凭证彻底失效（refresh 过期/被撤销/被判定重用）→ api 层派发事件 → 回登录页
+  useEffect(() => {
+    const onExpired = () => {
+      clearSession()
+      resetLocalState()
+    }
+    window.addEventListener(AUTH_EXPIRED_EVENT, onExpired)
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired)
+  }, [resetLocalState])
 
   // 登录后加载会话列表；无会话自动新建一个
   useEffect(() => {
@@ -343,10 +416,17 @@ export default function App() {
   const showOrders = view === 'orders'
   const showApproval = view === 'approval' && isAdmin
   const showUsers = view === 'users' && isAdmin
+  const showAnalytics = view === 'analytics' && isAdmin
+  const showDashboard = view === 'dashboard' && isAdmin
+  const showAdminOrders = view === 'adminOrders' && isAdmin
+  const showRefunds = view === 'refunds' && isAdmin
 
-  const goView = (v) => {
-    setView(view === v ? 'chat' : v)
-    if (v !== 'chat') setSteps([])
+  const goView = (v, params) => {
+    const fallback = isAdmin ? ADMIN_HOME : 'chat'
+    const next = view === v && !params ? fallback : v
+    setView(next)
+    if (params) { setViewParams(params); setNavSeq((n) => n + 1) }
+    if (next !== 'chat') setSteps([])
   }
 
   return (
@@ -361,6 +441,38 @@ export default function App() {
           </div>
         </div>
 
+        {/* ── 管理端导航：管理员看到的是"管理控制台"，不是"客服对话侧栏" ──
+            为什么把导航放在侧栏而不是顶栏：管理端有 6 个页面，顶栏图标挤不下；
+            而且客户视角在管理端是**次要入口**，按用户要求放在最底部。 */}
+        {isAdmin && (
+          <div className="flex min-h-0 flex-col px-2 pb-3">
+            <div className="mb-1.5 px-2 text-[11px] font-medium text-slate-400">管理</div>
+            {ADMIN_NAV.map((item) => (
+              <NavItem
+                key={item.view}
+                active={view === item.view}
+                label={item.label}
+                hint={item.hint}
+                icon={item.icon}
+                onClick={() => goView(item.view)}
+              />
+            ))}
+            <div className="mx-2 my-2 h-px bg-white/[0.07]" />
+            <div className="mb-1.5 px-2 text-[11px] font-medium text-slate-400">客户视角</div>
+            <NavItem
+              active={showChat}
+              label="AI 客服对话"
+              hint="以客户身份试用下单流程"
+              icon={<path d="M12 2a10 10 0 0 1 10 10c0 5-4 8-10 8-1.2 0-2.4-.2-3.4-.5L4 21l1.2-3.2A9.6 9.6 0 0 1 2 12 10 10 0 0 1 12 2Z" />}
+              onClick={() => goView('chat')}
+            />
+          </div>
+        )}
+
+        {/* 客户不变；管理员只在使用"客户视角"时看到会话列表。
+            ⚠️ 括号里是**多个兄弟元素**（新建按钮 + 会话列表 + 底部状态），
+            所以必须包一个 Fragment —— 否则 esbuild/React 报 'Expected ")"'。 */}
+        {showChat && (<>
         <div className="px-3 pb-2 pt-1">
           <button
             onClick={handleNewSession}
@@ -428,6 +540,7 @@ export default function App() {
             在线 · 即时响应
           </div>
         </div>
+        </>)}
       </aside>
 
       {/* ── 主区：上(顶栏) / 中(内容面板) / 下(输入，仅对话) 三个圆角浮层 ── */}
@@ -460,32 +573,26 @@ export default function App() {
               </span>
             </div>
 
-            {/* 视图切换：窄屏(<md)只显示图标，桌面(≥md)图标+文字 */}
-            <ViewToggle
-              active={showOrders}
-              label="我的订单"
-              title="我的订单"
-              onClick={() => goView('orders')}
-              icon={<path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4zM3 6h18M16 10a4 4 0 0 1-8 0" />}
-            />
-            {isAdmin && (
+            {/* 导航：管理端在侧栏（6 个页面顶栏挤不下），客户只有"我的订单"一个附加页 */}
+            {!isAdmin && (
               <ViewToggle
-                active={showApproval}
-                label="订单审批"
-                title="订单审批"
-                onClick={() => goView('approval')}
-                icon={<path d="M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />}
+                active={showOrders}
+                label="我的订单"
+                title="我的订单"
+                onClick={() => goView('orders')}
+                icon={<path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4zM3 6h18M16 10a4 4 0 0 1-8 0" />}
               />
             )}
-            {isAdmin && (
-              <ViewToggle
-                active={showUsers}
-                label="用户管理"
-                title="已注册用户"
-                onClick={() => goView('users')}
-                icon={<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />}
-              />
-            )}
+
+            <button
+              onClick={() => setShowPassword(true)}
+              title="修改密码"
+              className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.05] text-slate-400 transition-colors hover:border-brand-300/40 hover:text-brand-200 active:scale-95"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3" />
+              </svg>
+            </button>
 
             <button
               onClick={handleLogout}
@@ -500,8 +607,42 @@ export default function App() {
           </div>
         </header>
 
-        {/* 中：审批 / 用户 / 订单 / 对话 面板 */}
-        {showUsers ? (
+        {/* 中：工作台 / 订单管理 / 退款审核 / 分析 / 审批 / 用户 / 订单 / 对话 面板 */}
+        {showDashboard ? (
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.02] shadow-panel backdrop-blur-xl">
+            <main className="thin-scroll flex-1 overflow-y-auto">
+              <Suspense fallback={<PanelLoading label="工作台" />}>
+                <AdminDashboard onNavigate={goView} />
+              </Suspense>
+            </main>
+          </div>
+        ) : showAdminOrders ? (
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.02] shadow-panel backdrop-blur-xl">
+            <main className="thin-scroll flex-1 overflow-y-auto">
+              <Suspense fallback={<PanelLoading label="订单管理" />}>
+                {/* key=navSeq：从工作台点"待发货"进来时按筛选条件重新挂载 */}
+                <OrderManager key={`om-${navSeq}`} initialStatus={viewParams.status || ''}
+                              initialKeyword={viewParams.keyword || ''} />
+              </Suspense>
+            </main>
+          </div>
+        ) : showRefunds ? (
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.02] shadow-panel backdrop-blur-xl">
+            <main className="thin-scroll flex-1 overflow-y-auto">
+              <Suspense fallback={<PanelLoading label="退款审核" />}>
+                <RefundPanel key={`rp-${navSeq}`} initialStatus={viewParams.status || '待审核'} />
+              </Suspense>
+            </main>
+          </div>
+        ) : showAnalytics ? (
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.02] shadow-panel backdrop-blur-xl">
+            <main className="thin-scroll flex-1 overflow-y-auto">
+              <Suspense fallback={<div className="p-4 text-[12px] text-slate-400">正在加载分析组件…</div>}>
+                <AnalyticsPanel />
+              </Suspense>
+            </main>
+          </div>
+        ) : showUsers ? (
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.02] shadow-panel backdrop-blur-xl">
             <main className="thin-scroll flex-1 overflow-y-auto">
               <UserList />
@@ -604,6 +745,9 @@ export default function App() {
           </footer>
         )}
       </div>
+
+      {/* 修改密码（顶栏钥匙按钮打开）；成功后当前设备保持登录，其他设备被登出 */}
+      <ChangePasswordModal open={showPassword} onClose={() => setShowPassword(false)} />
     </div>
   )
 }
@@ -640,6 +784,38 @@ function EmptyState({ onPick }) {
 
 
 /** 顶栏视图切换按钮：<md 仅图标，≥md 图标+文字（给右侧腾出空间） */
+/** 懒加载面板的占位（管理员页面按需加载，加载瞬间给个反馈而不是白屏） */
+function PanelLoading({ label }) {
+  return <div className="p-4 text-[12px] text-slate-400">正在加载{label}组件…</div>
+}
+
+/** 侧栏管理导航项：图标 + 标题 + 副标题（副标题是"点进去能看到什么"） */
+function NavItem({ active, label, hint, onClick, icon }) {
+  return (
+    <button
+      onClick={onClick}
+      title={hint || label}
+      className={`flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors active:scale-[0.99] ${
+        active
+          ? 'border border-brand-300/25 bg-brand-400/15 text-slate-50'
+          : 'border border-transparent text-slate-300 hover:bg-white/[0.05]'
+      }`}
+    >
+      <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border ${
+        active ? 'border-brand-300/30 bg-brand-400/15 text-brand-100' : 'border-white/10 bg-white/[0.05] text-slate-400'
+      }`}>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          {icon}
+        </svg>
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[13px] font-medium leading-tight">{label}</span>
+        {hint && <span className="block truncate text-[10px] leading-tight text-slate-500">{hint}</span>}
+      </span>
+    </button>
+  )
+}
+
 function ViewToggle({ active, label, title, onClick, icon }) {
   return (
     <button

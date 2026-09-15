@@ -9,7 +9,13 @@ import { decideApproval, fetchPending } from '../api'
 
 function fmtTime(ts) {
   if (!ts) return '—'
-  const d = new Date(Number(ts) * 1000)
+  // 后端 `pending_approvals.created_at` 是 **timestamptz → ISO 字符串**
+  // （如 "2026-09-14T09:05:36.565223+00:00"）。旧实现直接 `Number(ts) * 1000` ——
+  // 那是"epoch 秒"时代的写法，遇到 ISO 串得到 NaN，页面显示 **Invalid Date**（真实踩过）。
+  // 这里两种都兜住：纯数字按 epoch 秒，其余交给 Date 解析；仍失败就降级成截断的原文。
+  const raw = String(ts).trim()
+  const d = /^\d+$/.test(raw) ? new Date(Number(raw) * 1000) : new Date(raw)
+  if (Number.isNaN(d.getTime())) return raw.slice(0, 16).replace('T', ' ')
   return d.toLocaleString('zh-CN', {
     month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit',
@@ -42,11 +48,12 @@ export default function ApprovalPanel() {
 
   useEffect(() => { load() }, [load])
 
-  const onDecide = useCallback(async (threadId, approved) => {
+  const onDecide = useCallback(async (threadId, approved, approvalId = '') => {
     setBusyId(threadId)
     setError('')
     try {
-      const res = await decideApproval(approved ? 'approve' : 'reject', threadId, approved ? '' : rejectReason.trim())
+      const res = await decideApproval(approved ? 'approve' : 'reject', threadId,
+                                      approved ? '' : rejectReason.trim(), approvalId)
       if (!res.ok) throw new Error(res.error || '审批失败')
       setPending((prev) => prev.filter((p) => p.thread_id !== threadId))
       setRejectingId('')
@@ -127,7 +134,7 @@ export default function ApprovalPanel() {
                         <td className="px-3 py-2.5">
                           <div className="flex items-center justify-end gap-1.5">
                             <button
-                              onClick={() => onDecide(p.thread_id, true)}
+                              onClick={() => onDecide(p.thread_id, true, p.approval_id)}
                               disabled={!!busyId}
                               className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-300 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40 active:scale-95"
                             >
@@ -154,7 +161,7 @@ export default function ApprovalPanel() {
                                 className="flex-1 rounded-lg border border-white/[0.10] bg-white/[0.06] px-3 py-1.5 text-[12px] text-slate-100 outline-none transition-colors placeholder:text-slate-400/80 focus:border-brand-400 focus:ring-2 focus:ring-brand-500/20"
                               />
                               <button
-                                onClick={() => onDecide(p.thread_id, false)}
+                                onClick={() => onDecide(p.thread_id, false, p.approval_id)}
                                 disabled={!!busyId}
                                 className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-2.5 py-1.5 text-[11px] font-medium text-rose-300 transition-colors hover:bg-rose-500/20 disabled:opacity-40 active:scale-95"
                               >
