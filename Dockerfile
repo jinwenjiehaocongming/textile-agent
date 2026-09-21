@@ -22,15 +22,21 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 # 依赖层（利用层缓存）
+# pip 源可覆盖：国内部署默认走清华镜像（官方 PyPI 在容器内常超时）；
+# 海外环境可用 --build-arg PIP_INDEX_URL=https://pypi.org/simple 覆盖
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -i ${PIP_INDEX_URL} -r requirements.txt
 
 # 模型下载放【应用代码 COPY 之前】：以后只改业务代码时，
 # COPY 层及后续层复用缓存，不会每次重下 0.4GB 模型
 # （下载行临时关 offline + 禁 Xet；官方源不可达时可加 HF_ENDPOINT 换镜像）
 ARG DOWNLOAD_MODELS=1
+# HF 模型源可覆盖：国内部署默认走 hf-mirror.com（官方源不可达）；
+# 官方源可用时 --build-arg HF_ENDPOINT=https://huggingface.co 覆盖
+ARG HF_ENDPOINT=https://hf-mirror.com
 RUN if [ "$DOWNLOAD_MODELS" = "1" ]; then \
-      HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 HF_HUB_DISABLE_XET=1 \
+      HF_ENDPOINT=${HF_ENDPOINT} HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 HF_HUB_DISABLE_XET=1 \
         python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-base-zh-v1.5')"; \
     fi
 

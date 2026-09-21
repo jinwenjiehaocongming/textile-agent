@@ -11,6 +11,8 @@ services:
       context: .
       args:
         DOWNLOAD_MODELS: ${DOWNLOAD_MODELS:-1}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
+        HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
     ports:
       # 加反向代理(nginx/caddy)时改成 "127.0.0.1:8005:8005"，只让本机/代理访问
       - "8005:8005"
@@ -44,9 +46,9 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      # 生产请改强密码，并同步 app 的 DATABASE_URL
+      # 生产请通过 .env 的 POSTGRES_PASSWORD 改强密码，并同步 app 的 DATABASE_URL
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: study1
     ports:
       - "127.0.0.1:5432:5432"   # 仅本机可连（调试）；数据库绝不暴露公网
