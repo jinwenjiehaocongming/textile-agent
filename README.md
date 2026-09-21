@@ -88,7 +88,8 @@
   演示数据与治理脚本（清理/回填全部 dry-run 默认 + 审计留痕）
 - **全链路异步** — LangGraph `ainvoke`、节点 async、LLM `astream` 单事件循环（企业级演进）
 - **评估体系** — 检索消融 85 题 + 端到端规则 25 题 + LLM-as-Judge 四维 (11/11) +
-  **数据分析 9 题**（带参考 SQL 的真值、题目/结果/数字/编造四个维度自动判分，当前 9/9）
+  **数据分析 9 题**（带参考 SQL 的真值、题目/结果/数字/编造四个维度自动判分；
+  多轮实测 96%（26/27），"products 无 product_no 列"等易错点已写进语义层，见 EVALUATION.md）
 - **测试与 CI** — pytest 251 条 + 前端 4 套 Node 测试；GitHub Actions 起 PostgreSQL/Redis
   容器跑全量（最近一次 success）
 

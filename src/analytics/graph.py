@@ -368,6 +368,27 @@ def extract_numbers(text: str) -> list:
     return out
 
 
+def scan_number_tokens(text: str) -> list:
+    """扫描**原文**里的数字 token（不失真）：返回 [(绝对值, 是否带百分号, 起始位置)]。
+
+    与 ``extract_numbers`` 的分工：那个做日期/编号掩码、只要数值（结论反编造用）；
+    这里保留原文位置和百分号上下文——`numbers_check` 需要"数字 F 是写成了 12 还是 12%"
+    来区分"同量级命中"和"百分比变体命中"，也需要位置做"分类就近"校验。
+    刻意不做掩码：掩码会改变文本长度，位置就对不上原文了。
+    """
+    out = []
+    for m in _NUM_RE.finditer(text or ""):
+        raw, unit = m.group(1).replace(",", ""), (m.group(2) or "")
+        if raw in ("", "."):
+            continue
+        try:
+            out.append((float(raw) * _UNIT_SCALE.get(unit, 1.0),
+                        bool(re.match(r"\s*%", text[m.end():])), m.start()))
+        except ValueError:
+            continue
+    return out
+
+
 _DERIVE_CAP = 120          # 参与两两推算的取值上限（避免 O(n²) 爆炸）
 
 

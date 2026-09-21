@@ -45,3 +45,6 @@ index/qdrant_storage/
 data/orphans_backup_*.json
 # 浏览器自动化（CDP 截图/用户目录）临时产物
 .cdp*/
+
+# 2026-09：评测运行产物（数据，不进版本库）
+eval_results/

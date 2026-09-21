@@ -25,18 +25,25 @@ CASES = [
     {
         "id": "refund_rate_by_color",
         "question": "退款率最高的颜色是哪些？",
-        # 口径必须与语义层一致：语义层写的是"订单数 < 10 不参与排名"（小样本会霸榜）。
-        # 初版这里用 >= 5，把 6 单的咖啡色算成了第一名 —— 于是 Agent 按语义层排除了它，
-        # 反而被评测判错。**评测口径与业务口径不一致时，挨骂的是执行者。**
+        # 口径与语义层对齐（2026-09 多轮评测修正）：
+        #   原版参考 SQL 用**工单口径**（count(DISTINCT refunds.order_no)/订单数），
+        #   而语义层 METRICS 定义"退款率 = 已退款订单数 / 订单数"——模型按语义层答，
+        #   每轮 Top3 都和参考对不上（军绿 vs 米色），却因 numbers_check 的
+        #   ×100 变体 + 宽松容差（0.1154×100≈11.54 vs 结论里的整数 12）恒过。
+        #   这正是本文件注释里自己批评过的"评测口径与业务口径不一致，挨骂的是执行者"。
+        #   修正：参考 SQL 改用与语义层一致的**已退款订单口径**；工单口径由
+        #   refund_requests_by_product 专门覆盖（客户申请口径，含被驳回）。
+        #   （保留：订单数 < 10 不参与排名，否则"3 单全退"的颜色会以 100% 霸榜。）
+        #   numbers_check 也已收紧：百分比变体必须带 %、且要求分类就近。
         "reference_sql": """
             SELECT o.color AS k,
-                   round(1.0 * count(DISTINCT r.order_no) / count(DISTINCT o.order_no), 4) AS v
-            FROM orders o LEFT JOIN refunds r ON r.order_no = o.order_no
+                   round(1.0 * sum(CASE WHEN o.status = '已退款' THEN 1 ELSE 0 END) / count(*), 4) AS v
+            FROM orders o
             WHERE o.status <> '已取消'
-            GROUP BY o.color HAVING count(DISTINCT o.order_no) >= 10
+            GROUP BY o.color HAVING count(*) >= 10
             ORDER BY v DESC LIMIT 3""",
         "mentions": 2,          # 前 3 名里至少提到 2 个（不要求顺序一致）
-        "numbers": 2,           # 数值命中（比率/百分比两种写法都认）
+        "numbers": 2,           # 数值命中（比率/百分比两种写法都认；必须与分类就近）
     },
     {
         "id": "refund_by_product",

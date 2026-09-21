@@ -30,6 +30,8 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv()
 
+from openai import APIConnectionError, APITimeoutError  # noqa: E402
+
 from src.analytics import eval_checks as checks  # noqa: E402
 from src.analytics import graph as analytics_graph  # noqa: E402
 from src.analytics import sql as analytics_sql  # noqa: E402
@@ -66,7 +68,14 @@ async def run_case(case: dict, steps: int) -> dict:
 
     orders_before = (await query_all("SELECT count(*) AS n FROM orders"))[0]["n"]
 
-    state = await analytics_graph.analyze(case["question"], max_steps=steps)
+    try:
+        state = await analytics_graph.analyze(case["question"], max_steps=steps)
+    except (APIConnectionError, APITimeoutError):
+        # 网络/上游抖动（openai 客户端内部已重试过一轮）：整条用例重跑一次，
+        # 别让 10 秒的用例因为一次断连被记成 0 分失败（多轮评测实测踩过）。
+        print(f"    ⚠️  {case['id']}: LLM 连接失败，5 秒后重试一次…")
+        await asyncio.sleep(5)
+        state = await analytics_graph.analyze(case["question"], max_steps=steps)
     text = checks.answer_text(state)
     out["report"] = state.get("report", "")
     out["sql"] = [r.get("sql", "") for r in state.get("records", [])]
@@ -91,9 +100,11 @@ async def run_case(case: dict, steps: int) -> dict:
             out["checks"].append((f"提到参考结果中的 {need} 个", hit >= need,
                                   f"{hit}/{need}：{values}"))
         if case.get("numbers"):
-            values = [t["v"] for t in truth if t["v"] is not None][:case["numbers"]]
+            # 传 (k, v) 对：百分比命中要求分类就近，数字不能"错位沾光"（见 eval_checks）
+            pairs = [(t["k"], t["v"]) for t in truth if t["v"] is not None][:case["numbers"]]
+            values = [v for _, v in pairs]
             hit, need = checks.numbers_check(text, values, case["numbers"],
-                                             case.get("tolerance", 0.15))
+                                             case.get("tolerance", 0.15), pairs=pairs)
             out["checks"].append((f"数值命中（容差 {case.get('tolerance', 0.15):.0%}）", hit >= need,
                                   f"{hit}/{need}：{values}"))
         if case.get("forbid"):
