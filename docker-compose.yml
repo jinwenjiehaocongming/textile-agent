@@ -21,7 +21,8 @@ services:
     environment:
       - HF_HUB_OFFLINE=1
       - TRANSFORMERS_OFFLINE=1
-      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/study1
+      # DATABASE_URL 由 .env 提供（生产改强密码）；缺省时用容器内网默认值
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://postgres:postgres@postgres:5432/study1}
       - QDRANT_URL=http://qdrant:6333
       # L1 热缓存：连不上会 fail-open 降级进程内缓存（不阻塞启动，故不依赖 healthcheck）
       - REDIS_URL=redis://redis:6379/0
